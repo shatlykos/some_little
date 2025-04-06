@@ -1,10 +1,8 @@
 import abc
 
 
-class $(abc.ABC):
+class MyAbstractClass(abc.ABC):
     
     @abc.abstractmethod
-    def $(self) -> $
-    
-    :
-    pass
+    def abstractmethod(self) -> None:
+        pass
