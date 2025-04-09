@@ -1,3 +1,0 @@
-import itertools
-
-help(itertools)
