@@ -165,14 +165,20 @@ class Calendar:
         return any(alias in loc for alias in resource.aliases)
 
     def event_title(self, summary: str) -> str | None:
-        """Если событие — публичное мероприятие (название начинается с 🎭),
+        """Если событие — публичное мероприятие (в названии есть 🎭),
         возвращает название без значка. Иначе None (частная бронь)."""
         text = (summary or "").strip()
+        found = False
         for marker in self.cfg.event_markers:
-            if text.lower().startswith(marker.lower()):
-                rest = text[len(marker):].lstrip("\ufe0f :—-").strip()
-                return rest or "Мероприятие"
-        return None
+            idx = text.lower().find(marker.lower())
+            while idx != -1:
+                found = True
+                text = text[:idx] + text[idx + len(marker):]
+                idx = text.lower().find(marker.lower())
+        if not found:
+            return None
+        text = " ".join(text.replace("\ufe0f", "").split()).strip(" :—-")
+        return text or "Мероприятие"
 
     def resource_by_location(self, location: str) -> Resource | None:
         if not location:
