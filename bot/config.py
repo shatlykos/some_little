@@ -59,8 +59,18 @@ def _parse_time(value: str) -> time:
 def load_config(path: Path | None = None) -> Config:
     load_dotenv(ROOT / ".env")
     path = path or ROOT / "config.yaml"
-    with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            raw = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"Не найден {path.name}. Запустите install.bat") from None
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        where = f" (строка {mark.line + 1})" if mark else ""
+        raise SystemExit(
+            f"Ошибка в {path.name}{where}: проверьте кавычки и отступы рядом с этой строкой. "
+            "Отступы — только пробелами, как в config.example.yaml."
+        ) from None
 
     token = os.environ.get("BOT_TOKEN", "").strip()
     admin = os.environ.get("ADMIN_ID", "").strip()
@@ -72,7 +82,7 @@ def load_config(path: Path | None = None) -> Config:
             key=r["key"],
             name=r["name"],
             emoji=r.get("emoji", "•"),
-            calendar_id=r["calendar_id"],
+            calendar_id=str(r["calendar_id"]).strip(),
             min_duration=timedelta(minutes=int(r["min_minutes"])),
             aliases=tuple(a.lower() for a in r.get("aliases", [r["name"]])),
         )
@@ -95,7 +105,7 @@ def load_config(path: Path | None = None) -> Config:
         reminders=tuple(
             timedelta(hours=float(h)) for h in raw.get("reminders_hours", [24, 2])
         ),
-        events_calendar_id=raw["events_calendar"]["calendar_id"],
+        events_calendar_id=str(raw["events_calendar"]["calendar_id"]).strip(),
         events_calendar_name=raw["events_calendar"].get("name", "Афиша"),
         resources=resources,
         db_path=ROOT / "bookings.db",
