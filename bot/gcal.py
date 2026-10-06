@@ -1,4 +1,4 @@
-"""Обёртка над Google Calendar API (сервисный аккаунт).
+"""Обёртка над Google Calendar API.
 
 Библиотека googleapiclient синхронная и не потокобезопасная, поэтому каждый
 вызов выполняется в отдельном потоке (asyncio.to_thread) со своим объектом
@@ -12,16 +12,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .config import Config, Resource
+from .google_auth import load_credentials
 from .slots import Busy
 
 log = logging.getLogger(__name__)
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
-
 
 @dataclass(frozen=True)
 class CalEvent:
@@ -37,9 +35,7 @@ class Calendar:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.tz: ZoneInfo = cfg.tz
-        self._creds = service_account.Credentials.from_service_account_file(
-            str(cfg.google_credentials), scopes=SCOPES
-        )
+        self._creds = load_credentials(cfg.google_credentials, cfg.google_token)
 
     def _service(self):
         return build(

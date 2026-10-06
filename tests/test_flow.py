@@ -122,7 +122,7 @@ def env(tmp_path: Path, monkeypatch):
         Resource("piano", "Фортепиано", "🎹", "cal-piano", timedelta(minutes=30), ("фортепиано",)),
     )
     cfg = Config(
-        bot_token="1:x", admin_id=ADMIN, tz=TZ, google_credentials=Path("x"),
+        bot_token="1:x", admin_id=ADMIN, tz=TZ, google_credentials=Path("x"), google_token=Path("t"),
         open_time=time(9), close_time=time(22), step=timedelta(minutes=30),
         gap=timedelta(minutes=5), horizon_days=30,
         reminders=(timedelta(hours=24), timedelta(hours=2)),

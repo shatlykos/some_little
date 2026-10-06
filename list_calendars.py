@@ -1,7 +1,7 @@
-"""Проверка доступа: показывает календари, которые видит сервисный аккаунт,
+"""Проверка доступа: показывает все календари аккаунта (с идентификаторами)
 и проверяет, что каждый календарь из config.yaml доступен.
 
-Запуск:  python list_calendars.py
+Запуск:  python list_calendars.py   (или check.bat)
 """
 import asyncio
 import json
@@ -12,22 +12,24 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from bot.config import load_config  # noqa: E402
 from bot.gcal import Calendar  # noqa: E402
+from bot.google_auth import is_service_account  # noqa: E402
 
 
 async def main() -> None:
     cfg = load_config()
-    with open(cfg.google_credentials, encoding="utf-8") as f:
-        email = json.load(f)["client_email"]
-    print(f"Сервисный аккаунт: {email}")
-    print("Этот адрес нужно добавить в «Открыть доступ» каждого календаря.\n")
+    if is_service_account(cfg.google_credentials):
+        with open(cfg.google_credentials, encoding="utf-8") as f:
+            email = json.load(f)["client_email"]
+        print(f"Сервисный аккаунт: {email}")
+        print("Этот адрес нужно добавить в «Открыть доступ» каждого календаря.\n")
 
     cal = Calendar(cfg)
     items = await cal.calendar_list()
-    print("Календари в списке сервисного аккаунта:")
+    print("Ваши календари (скопируйте нужные id в config.yaml):")
     for c in items:
-        print(f"  {c.get('summary')!r:40} id = {c['id']}")
+        print(f"  {c.get('summary', '')!r:35} id: {c['id']}")
     if not items:
-        print("  (пусто — это нормально, если календари расшарены, но ещё не добавлены в список)")
+        print("  (список пуст)")
 
     print("\nПроверка календарей из config.yaml:")
     now = datetime.now(cfg.tz)
@@ -42,7 +44,7 @@ async def main() -> None:
         except Exception as e:  # noqa: BLE001
             ok = False
             print(f"  ❌ {name} ({cid}): {e}")
-    print("\nВсё готово!" if ok else "\nИсправьте ошибки выше (см. README, шаг 3).")
+    print("\nВсё готово! Можно запускать run.bat" if ok else "\nИсправьте calendar_id в config.yaml для календарей с ❌.")
 
 
 asyncio.run(main())

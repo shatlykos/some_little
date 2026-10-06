@@ -32,6 +32,7 @@ class Config:
     admin_id: int
     tz: ZoneInfo
     google_credentials: Path
+    google_token: Path
     open_time: time
     close_time: time
     step: timedelta
@@ -77,15 +78,15 @@ def load_config(path: Path | None = None) -> Config:
         )
         for r in raw["resources"]
     )
-    creds = Path(raw.get("google_credentials", "service-account.json"))
-    if not creds.is_absolute():
-        creds = ROOT / creds
+    creds = ROOT / raw.get("google_credentials", "credentials.json")
+    google_token = ROOT / raw.get("google_token", "token.json")
 
     return Config(
         bot_token=token,
         admin_id=int(admin),
         tz=ZoneInfo(raw.get("timezone", "Asia/Tbilisi")),
         google_credentials=creds,
+        google_token=google_token,
         open_time=_parse_time(raw.get("open_time", "09:00")),
         close_time=_parse_time(raw.get("close_time", "22:00")),
         step=timedelta(minutes=int(raw.get("step_minutes", 30))),

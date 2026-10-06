@@ -9,5 +9,5 @@ pip install -r requirements.txt || (pause & exit /b 1)
 if not exist config.yaml copy config.example.yaml config.yaml
 if not exist .env copy .env.example .env
 echo.
-echo Готово. Теперь заполните .env и config.yaml (см. README.md), затем запустите check.bat
+echo Готово. Теперь заполните .env и config.yaml (см. README.md), затем authorize.bat и check.bat
 pause

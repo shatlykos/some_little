@@ -177,5 +177,8 @@ cython_debug/
 .env
 config.yaml
 service-account*.json
+credentials.json
+client_secret*.json
+token.json
 bookings.db
 bot.log*

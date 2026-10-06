@@ -3,8 +3,10 @@
 
 timezone: Asia/Tbilisi        # GMT+4
 
-# Путь к JSON-ключу сервисного аккаунта Google (см. README, шаг 2)
-google_credentials: service-account.json
+# OAuth-клиент Google, скачанный из Cloud Console (README, шаг 2)
+google_credentials: credentials.json
+# Сюда authorize.bat сохранит доступ после входа в Google (README, шаг 3)
+google_token: token.json
 
 # Рабочие часы бронирования (одинаковые для всех дней)
 open_time: "09:00"
@@ -23,9 +25,9 @@ events_calendar:
   calendar_id: "galaxybook2018@gmail.com"
 
 # Помещения/инструменты, которые можно арендовать.
-# calendar_id — смотрите в Google Calendar: Настройки календаря →
-# «Интеграция календаря» → «Идентификатор календаря»,
-# или запустите  python list_calendars.py
+# calendar_id — проще всего узнать, запустив check.bat: он выведет
+# идентификаторы всех ваших календарей. Или в Google Calendar:
+# Настройки календаря → «Интеграция календаря» → «Идентификатор календаря».
 resources:
   - key: hall
     name: Зал
