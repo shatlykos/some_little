@@ -74,7 +74,12 @@ def authorize(credentials_file: Path, token_file: Path) -> str:
         port=0,
         prompt="consent",  # гарантирует выдачу refresh-токена
         access_type="offline",
-        authorization_prompt_message="Открываю браузер для входа в Google...\n{url}",
+        authorization_prompt_message=(
+            "Открываю браузер для входа в Google...\n"
+            "Если браузер не открылся — скопируйте эту ссылку и откройте её\n"
+            "в браузере НА ЭТОМ ЖЕ компьютере:\n\n{url}\n\n"
+            "Жду входа (окно не закрывайте)..."
+        ),
         success_message="Готово! Бот получил доступ к календарям. Это окно можно закрыть.",
     )
     token_file.write_text(creds.to_json(), encoding="utf-8")
