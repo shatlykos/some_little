@@ -9,6 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReplyKeyboardRemove
 
 from . import db as dbm
@@ -108,27 +109,57 @@ async def menu_view(msg: Message, state: FSMContext, svc: Service) -> None:
     )
 
 
-@router.message(F.text == kb.BTN_AFISHA)
-async def menu_afisha(msg: Message, svc: Service, cfg: Config) -> None:
+async def _afisha_text(svc: Service, cfg: Config, key: str) -> str:
     now = svc.now()
-    events = await svc.cal.afisha(now, now + timedelta(days=cfg.horizon_days))
-    if not events:
-        await msg.answer("В ближайшие дни мероприятий не запланировано.")
-        return
-    lines = ["<b>🎭 Ближайшие мероприятия</b>"]
+    items = await svc.cal.afisha(now, now + timedelta(days=cfg.horizon_days))
+    items = [i for i in items if i.end > now]
+    resource = None
+    if key:
+        try:
+            resource = cfg.resource(key)
+        except KeyError:
+            key = ""
+        items = [i for i in items if resource and i.resource == resource]
+
+    header = f"<b>🎭 Афиша: {resource.title}</b>" if resource else "<b>🎭 Ближайшие мероприятия</b>"
+    if not items:
+        return header + "\n\nВ ближайшие дни мероприятий не запланировано."
+    lines = [header]
     current_day = None
-    for e in events:
-        d = e.start.date()
+    for i in items:
+        d = i.start.date()
         if d != current_day:
             current_day = d
             lines.append(f"\n<b>{day_long(d).capitalize()}</b>")
-        when = "весь день" if e.all_day else span(e.start, e.end)
-        place = f" · {q(e.location)}" if e.location else ""
-        lines.append(f"• {when} — {q(e.summary or 'Мероприятие')}{place}")
+        when = "весь день" if i.all_day else span(i.start, i.end)
+        place = ""
+        if not resource:
+            if i.resource:
+                place = f" · {i.resource.title}"
+            elif i.place:
+                place = f" · {q(i.place)}"
+        lines.append(f"• {when} — {q(i.title)}{place}")
     text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000].rsplit("\n", 1)[0] + "\n…"
-    await msg.answer(text)
+    if len(text) > 3900:
+        text = text[:3900].rsplit("\n", 1)[0] + "\n…"
+    return text
+
+
+@router.message(F.text == kb.BTN_AFISHA)
+async def menu_afisha(msg: Message, svc: Service, cfg: Config) -> None:
+    await msg.answer(await _afisha_text(svc, cfg, ""), reply_markup=kb.afisha_kb(cfg.resources, ""))
+
+
+@router.callback_query(kb.AfishaCB.filter())
+async def on_afisha_filter(cb: CallbackQuery, callback_data: kb.AfishaCB,
+                           svc: Service, cfg: Config) -> None:
+    await cb.answer()
+    text = await _afisha_text(svc, cfg, callback_data.key)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb.afisha_kb(cfg.resources, callback_data.key))
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e):
+            raise
 
 
 @router.message(F.text == kb.BTN_MINE)
@@ -307,8 +338,10 @@ async def on_duration(cb: CallbackQuery, callback_data: kb.DurCB, state: FSMCont
 
 
 @router.message(Book.name, F.text)
-async def ask_phone(msg: Message, state: FSMContext) -> None:
+async def ask_phone(msg: Message, state: FSMContext, cfg: Config) -> None:
     name = msg.text.strip()
+    for marker in cfg.event_markers:
+        name = name.replace(marker, "").strip()
     if not 2 <= len(name) <= 60:
         return await msg.answer("Пожалуйста, введите имя (от 2 до 60 символов).")
     await state.update_data(name=name)

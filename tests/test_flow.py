@@ -298,16 +298,30 @@ def test_overview_and_afisha(env):
     cal.add("cal-events", datetime(2026, 10, 8, 19, tzinfo=TZ), datetime(2026, 10, 8, 21, tzinfo=TZ),
             "Концерт", "Фортепиано")
     cal.add("cal-piano", datetime(2026, 10, 8, 10, tzinfo=TZ), datetime(2026, 10, 8, 11, tzinfo=TZ), "Секрет")
+    cal.add("cal-workshop", datetime(2026, 10, 8, 19, tzinfo=TZ), datetime(2026, 10, 8, 20, tzinfo=TZ),
+            "🎭 Лекция Вадим")
+    cal.add("cal-workshop", datetime(2026, 10, 8, 12, tzinfo=TZ), datetime(2026, 10, 8, 13, tzinfo=TZ), "Анна")
 
     async def scenario():
         await send(dp, bot, CLIENT, kb.BTN_AFISHA)
-        assert "Концерт · Фортепиано" in session.sent[-1].text
+        text = session.sent[-1].text
+        assert "Концерт · 🎹 Фортепиано" in text
+        assert "Лекция Вадим · 🎨 Творческая мастерская" in text  # из календаря помещения
+        assert "Секрет" not in text and "Анна" not in text  # частные брони скрыты
+
+        await press(dp, bot, CLIENT, kb.AfishaCB(key="workshop"))
+        text = session.sent[-1].text
+        assert "Афиша: 🎨 Творческая мастерская" in text
+        assert "Лекция Вадим" in text and "Концерт" not in text
+        await press(dp, bot, CLIENT, kb.AfishaCB(key="piano"))
+        assert "Концерт" in session.sent[-1].text and "Лекция" not in session.sent[-1].text
 
         await send(dp, bot, CLIENT, kb.BTN_VIEW)
         await press(dp, bot, CLIENT, kb.DayCB(mode="v", day="20261008"))
         text = session.sent[-1].text
         assert "🎭 19:00–21:00 — Концерт" in text and "🔴 10:00–11:00 — занято" in text
         assert "Секрет" not in text
+        assert "🎭 19:00–20:00 — Лекция Вадим" in text and "🔴 12:00–13:00 — занято" in text
         # Из обзора — сразу к выбору времени конкретного помещения
         await press(dp, bot, CLIENT, kb.ResCB(key="piano", day="20261008"))
         starts = [b.text for b in buttons(session.last_markup()) if ":" in b.text]
@@ -325,5 +339,30 @@ def test_overview_and_afisha(env):
         await press(dp, bot, CLIENT, kb.DayCB(mode="b", day="20261006", page=1))
         days = [b.text for b in buttons(session.last_markup())]
         assert any("13 окт" in d for d in days)
+
+    asyncio.run(scenario())
+
+
+def test_client_name_cannot_become_event(env):
+    cfg, cal, svc, session, bot, dp = env
+    Clock.now = datetime(2026, 10, 6, 12, 0, tzinfo=TZ)
+
+    async def scenario():
+        await send(dp, bot, CLIENT, kb.BTN_BOOK)
+        await press(dp, bot, CLIENT, kb.ResCB(key="piano"))
+        await press(dp, bot, CLIENT, kb.DayCB(mode="b", day="20261007"))
+        await press(dp, bot, CLIENT, kb.StartCB(hhmm="1000"))
+        await press(dp, bot, CLIENT, kb.DurCB(minutes=30))
+        await send(dp, bot, CLIENT, "🎭 Концерт")
+        await send(dp, bot, CLIENT, "+995 555 12 34 56")
+        await send(dp, bot, CLIENT, "1")
+        await send(dp, bot, CLIENT, kb.BTN_SKIP)
+        await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
+        await press(dp, bot, ADMIN, kb.AdminCB(action="ok", id=1))
+        b = svc.db.get(1)
+        assert b.name == "Концерт" and b.status == dbm.APPROVED
+        assert cal.event_title(cal.events["cal-piano"][b.event_id].summary) is None
+        items = await cal.afisha(Clock.now, Clock.now + timedelta(days=30))
+        assert items == []
 
     asyncio.run(scenario())

@@ -81,6 +81,10 @@ class AdminCB(CallbackData, prefix="a"):
     id: int
 
 
+class AfishaCB(CallbackData, prefix="f"):
+    key: str = ""  # пусто — все места
+
+
 class CancelCB(CallbackData, prefix="x"):
     action: str  # "ask" | "yes" | "no"
     id: int
@@ -163,6 +167,16 @@ def overview_kb(resources: tuple[Resource, ...], day: date) -> InlineKeyboardMar
         kb.button(text=f"➕ {r.title}", callback_data=ResCB(key=r.key, day=ymd(day)))
     kb.button(text="⬅️ Другой день", callback_data=NavCB(to="vdays"))
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def afisha_kb(resources: tuple[Resource, ...], selected: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for r in resources:
+        mark = "• " if r.key == selected else ""
+        kb.button(text=f"{mark}{r.title}", callback_data=AfishaCB(key=r.key))
+    kb.button(text=("• " if not selected else "") + "Все места", callback_data=AfishaCB(key=""))
+    kb.adjust(2)
     return kb.as_markup()
 
 

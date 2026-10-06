@@ -31,6 +31,16 @@ class CalEvent:
     all_day: bool
 
 
+@dataclass(frozen=True)
+class AfishaItem:
+    start: datetime
+    end: datetime
+    all_day: bool
+    title: str
+    resource: Resource | None  # None — место не распознано
+    place: str  # текст места, если ресурс не распознан
+
+
 class Calendar:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -154,21 +164,57 @@ class Calendar:
         loc = location.lower()
         return any(alias in loc for alias in resource.aliases)
 
-    async def afisha(self, t_min: datetime, t_max: datetime) -> list[CalEvent]:
-        return await self.list_events(self.cfg.events_calendar_id, t_min, t_max)
+    def event_title(self, summary: str) -> str | None:
+        """Если событие — публичное мероприятие (название начинается с 🎭),
+        возвращает название без значка. Иначе None (частная бронь)."""
+        text = (summary or "").strip()
+        for marker in self.cfg.event_markers:
+            if text.lower().startswith(marker.lower()):
+                rest = text[len(marker):].lstrip("\ufe0f :—-").strip()
+                return rest or "Мероприятие"
+        return None
+
+    def resource_by_location(self, location: str) -> Resource | None:
+        if not location:
+            return None
+        return next((r for r in self.cfg.resources if self.location_matches(r, location)), None)
+
+    async def afisha(self, t_min: datetime, t_max: datetime) -> list[AfishaItem]:
+        """Все мероприятия: события с 🎭 в календарях помещений
+        + все события календаря-афиши (Galaxy Book)."""
+        calendars = [(r, r.calendar_id) for r in self.cfg.resources]
+        calendars.append((None, self.cfg.events_calendar_id))
+        results = await asyncio.gather(
+            *(self.list_events(cid, t_min, t_max) for _, cid in calendars)
+        )
+        items: list[AfishaItem] = []
+        for (resource, _), events in zip(calendars, results):
+            for e in events:
+                if resource is not None:
+                    title = self.event_title(e.summary)
+                    if title is None:
+                        continue  # частная бронь — в афишу не попадает
+                    items.append(AfishaItem(e.start, e.end, e.all_day, title, resource, ""))
+                else:
+                    title = self.event_title(e.summary) or e.summary or "Мероприятие"
+                    res = self.resource_by_location(e.location)
+                    items.append(AfishaItem(e.start, e.end, e.all_day, title, res, e.location))
+        items.sort(key=lambda i: (i.start, i.end))
+        return items
 
     async def busy_for_day(self, resource: Resource, day: date) -> list[Busy]:
-        """Занятость ресурса за сутки: его собственный календарь (анонимно)
-        + мероприятия из афиши, где в «Месте» указан этот ресурс (с названием)."""
+        """Занятость ресурса за сутки: события его календаря (частные брони —
+        анонимно, мероприятия с 🎭 — с названием) + события календаря-афиши,
+        где в «Месте» указан этот ресурс."""
         t_min = datetime.combine(day, time(0), self.tz)
         t_max = t_min + timedelta(days=1)
         own, events = await asyncio.gather(
             self.list_events(resource.calendar_id, t_min, t_max),
-            self.afisha(t_min, t_max),
+            self.list_events(self.cfg.events_calendar_id, t_min, t_max),
         )
-        busy = [Busy(e.start, e.end) for e in own]
+        busy = [Busy(e.start, e.end, self.event_title(e.summary)) for e in own]
         busy += [
-            Busy(e.start, e.end, e.summary or "Мероприятие")
+            Busy(e.start, e.end, self.event_title(e.summary) or e.summary or "Мероприятие")
             for e in events
             if self.location_matches(resource, e.location)
         ]
