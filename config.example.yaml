@@ -1,0 +1,56 @@
+# Скопируйте этот файл в config.yaml и заполните.
+# Секреты (токен бота) лежат в .env, а не здесь.
+
+timezone: Asia/Tbilisi        # GMT+4
+
+# Путь к JSON-ключу сервисного аккаунта Google (см. README, шаг 2)
+google_credentials: service-account.json
+
+# Рабочие часы бронирования (одинаковые для всех дней)
+open_time: "09:00"
+close_time: "22:00"
+
+step_minutes: 30              # шаг кнопок времени начала: 9:00, 9:30, 10:00...
+gap_minutes: 5                # перерыв между соседними бронями
+booking_horizon_days: 30      # на сколько дней вперёд можно бронировать
+reminders_hours: [24, 2]      # напоминания клиенту за N часов до начала
+
+# Календарь-афиша (мероприятия). Клиенты видят названия этих событий.
+# Если в поле «Место» (Location) события написано название помещения
+# (или любой из его aliases) — помещение считается занятым.
+events_calendar:
+  name: Galaxy Book
+  calendar_id: "galaxybook2018@gmail.com"
+
+# Помещения/инструменты, которые можно арендовать.
+# calendar_id — смотрите в Google Calendar: Настройки календаря →
+# «Интеграция календаря» → «Идентификатор календаря»,
+# или запустите  python list_calendars.py
+resources:
+  - key: hall
+    name: Зал
+    emoji: "🏛"
+    calendar_id: "ЗАМЕНИТЕ@group.calendar.google.com"
+    min_minutes: 60
+    aliases: [зал]
+
+  - key: tapchan
+    name: Тапчан (над баром)
+    emoji: "🛋"
+    calendar_id: "ЗАМЕНИТЕ@group.calendar.google.com"
+    min_minutes: 60
+    aliases: [тапчан]
+
+  - key: workshop
+    name: Творческая мастерская
+    emoji: "🎨"
+    calendar_id: "ЗАМЕНИТЕ@group.calendar.google.com"
+    min_minutes: 60
+    aliases: [мастерская, творческая мастерская]
+
+  - key: piano
+    name: Фортепиано
+    emoji: "🎹"
+    calendar_id: "ЗАМЕНИТЕ@group.calendar.google.com"
+    min_minutes: 30
+    aliases: [фортепиано, пианино]

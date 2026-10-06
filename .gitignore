@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Секреты и данные бота
+.env
+config.yaml
+service-account*.json
+bookings.db
+bot.log*
