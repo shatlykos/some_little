@@ -105,7 +105,8 @@ class Service:
             if b.end <= day_open or b.start >= day_close:
                 continue
             if b.title:
-                rows.append((b.start, f"🎭 {span(b.start, b.end)} — {q(b.title)}"))
+                icon = "🎭" if b.event else "🔴"
+                rows.append((b.start, f"{icon} {span(b.start, b.end)} — {q(b.title)}"))
             else:
                 rows.append((b.start, f"🔴 {span(b.start, b.end)} — занято"))
         has_free = False

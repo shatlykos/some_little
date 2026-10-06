@@ -222,7 +222,7 @@ def test_full_booking_flow(env):
         starts2 = [b.text for b in buttons(session.last_markup()) if ":" in b.text]
         assert "17:00" not in starts2
         day2 = session.sent[-1].text
-        assert "🔴 17:05–17:55 — занято" in day2 and "Анна (заявка)" not in day2  # бронь из бота скрыта
+        assert "🔴 17:05–17:55 — ⏳ Анна (заявка)" in day2  # бронь из бота видна всем
 
         # Не-админ не может подтвердить
         await press(dp, bot, CLIENT, kb.AdminCB(action="ok", id=1))
@@ -312,7 +312,7 @@ def test_overview_and_afisha(env):
         text = session.sent[-1].text
         assert "Концерт · 🎹 Фортепиано" in text
         assert "Лекция Вадим · 🎨 Творческая мастерская" in text  # из календаря помещения
-        assert "Секрет" not in text and "Анна" not in text  # частные брони скрыты
+        assert "Секрет" not in text and "Анна" not in text  # брони клиентов из бота — не в афише
 
         await press(dp, bot, CLIENT, kb.AfishaCB(key="workshop"))
         text = session.sent[-1].text
@@ -324,9 +324,9 @@ def test_overview_and_afisha(env):
         await send(dp, bot, CLIENT, kb.BTN_VIEW)
         await press(dp, bot, CLIENT, kb.DayCB(mode="v", day="20261008"))
         text = session.sent[-1].text
-        assert "🎭 19:00–21:00 — Концерт" in text and "🔴 10:00–11:00 — занято" in text
-        assert "Секрет" not in text
-        assert "🎭 19:00–20:00 — Лекция Вадим" in text and "🔴 12:00–13:00 — занято" in text
+        assert "🎭 19:00–21:00 — Концерт" in text
+        assert "🔴 10:00–11:00 — ⏳ Секрет (заявка)" in text
+        assert "🎭 19:00–20:00 — Лекция Вадим" in text and "🔴 12:00–13:00 — Анна" in text
         # Из обзора — сразу к выбору времени конкретного помещения
         await press(dp, bot, CLIENT, kb.ResCB(key="piano", day="20261008"))
         starts = [b.text for b in buttons(session.last_markup()) if ":" in b.text]

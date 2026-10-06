@@ -167,13 +167,10 @@ class Calendar:
         loc = location.lower()
         return any(alias in loc for alias in resource.aliases)
 
-    def event_title(self, e: CalEvent) -> str | None:
-        """Название, которое видят клиенты. Брони клиентов, созданные ботом, —
-        None (показываем «занято»). Всё, что внесено в календарь вручную, —
-        мероприятие с названием."""
-        if e.from_bot:
-            return None
-        return " ".join((e.summary or "").split()) or "Мероприятие"
+    @staticmethod
+    def event_title(e: CalEvent) -> str:
+        """Название события, которое видят клиенты (все события видны всем)."""
+        return " ".join((e.summary or "").split()) or ("Бронь" if e.from_bot else "Мероприятие")
 
     def resource_by_location(self, location: str) -> Resource | None:
         if not location:
@@ -191,9 +188,9 @@ class Calendar:
         items: list[AfishaItem] = []
         for (resource, _), events in zip(calendars, results):
             for e in events:
+                if e.from_bot:
+                    continue  # брони клиентов из бота в афишу не попадают
                 title = self.event_title(e)
-                if title is None:
-                    continue  # бронь клиента — в афишу не попадает
                 if resource is not None:
                     items.append(AfishaItem(e.start, e.end, e.all_day, title, resource, ""))
                 else:
@@ -203,18 +200,17 @@ class Calendar:
         return items
 
     async def busy_for_day(self, resource: Resource, day: date) -> list[Busy]:
-        """Занятость ресурса за сутки: события его календаря (брони клиентов из
-        бота — анонимно, остальное — с названием) + события календаря-афиши,
-        где в «Месте» указан этот ресурс."""
+        """Занятость ресурса за сутки (все события с названиями): события его
+        календаря + события календаря-афиши, где в «Месте» указан этот ресурс."""
         t_min = datetime.combine(day, time(0), self.tz)
         t_max = t_min + timedelta(days=1)
         own, events = await asyncio.gather(
             self.list_events(resource.calendar_id, t_min, t_max),
             self.list_events(self.cfg.events_calendar_id, t_min, t_max),
         )
-        busy = [Busy(e.start, e.end, self.event_title(e)) for e in own]
+        busy = [Busy(e.start, e.end, self.event_title(e), event=not e.from_bot) for e in own]
         busy += [
-            Busy(e.start, e.end, self.event_title(e))
+            Busy(e.start, e.end, self.event_title(e), event=True)
             for e in events
             if self.location_matches(resource, e.location)
         ]

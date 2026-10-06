@@ -21,6 +21,7 @@ class Busy:
     start: datetime
     end: datetime
     title: str | None = None  # None — показываем клиенту просто «Занято»
+    event: bool = False  # мероприятие (создано вручную), а не бронь клиента из бота
 
 
 @dataclass(frozen=True)
