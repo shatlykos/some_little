@@ -41,9 +41,9 @@ class FakeCalendar(Calendar):
         self.events: dict[str, dict[str, CalEvent]] = {}
         self._ids = itertools.count(1)
 
-    def add(self, cid, start, end, summary="", location=""):
+    def add(self, cid, start, end, summary="", location="", from_bot=False):
         eid = f"e{next(self._ids)}"
-        self.events.setdefault(cid, {})[eid] = CalEvent(eid, summary, location, start, end, False)
+        self.events.setdefault(cid, {})[eid] = CalEvent(eid, summary, location, start, end, False, from_bot)
         return eid
 
     def _list_sync(self, cid, t_min, t_max):
@@ -58,11 +58,12 @@ class FakeCalendar(Calendar):
             datetime.fromisoformat(body["start"]["dateTime"]),
             datetime.fromisoformat(body["end"]["dateTime"]),
             body["summary"],
+            from_bot="booking_id" in body["extendedProperties"]["private"],
         )
 
     def _patch_sync(self, cid, eid, body):
         e = self.events[cid][eid]
-        self.events[cid][eid] = CalEvent(e.id, body.get("summary", e.summary), e.location, e.start, e.end, False)
+        self.events[cid][eid] = CalEvent(e.id, body.get("summary", e.summary), e.location, e.start, e.end, False, e.from_bot)
 
     def _delete_sync(self, cid, eid):
         self.events.get(cid, {}).pop(eid, None)
@@ -186,8 +187,8 @@ def test_full_booking_flow(env):
         await press(dp, bot, CLIENT, kb.DayCB(mode="b", day=kb.ymd(DAY)))
 
         day_text = session.sent[-1].text
-        assert "🔴 16:00–17:00 — занято" in day_text
-        assert "Анна" not in day_text and "Максим" not in day_text  # имена скрыты
+        assert "🎭 16:00–17:00 — Анна Груз" in day_text  # внесено вручную — видно
+        assert "🎭 18:00–19:00 — Максим" in day_text
         assert "🎭 20:00–21:00 — Мастер-класс по керамике" in day_text
         starts = [b.text for b in buttons(session.last_markup()) if ":" in b.text]
         assert "17:00" in starts and "16:00" not in starts and "20:00" not in starts
@@ -220,6 +221,8 @@ def test_full_booking_flow(env):
         await press(dp, bot, CLIENT2, kb.DayCB(mode="b", day=kb.ymd(DAY)))
         starts2 = [b.text for b in buttons(session.last_markup()) if ":" in b.text]
         assert "17:00" not in starts2
+        day2 = session.sent[-1].text
+        assert "🔴 17:05–17:55 — занято" in day2 and "Анна (заявка)" not in day2  # бронь из бота скрыта
 
         # Не-админ не может подтвердить
         await press(dp, bot, CLIENT, kb.AdminCB(action="ok", id=1))
@@ -297,10 +300,12 @@ def test_overview_and_afisha(env):
     Clock.now = datetime(2026, 10, 6, 12, 0, tzinfo=TZ)
     cal.add("cal-events", datetime(2026, 10, 8, 19, tzinfo=TZ), datetime(2026, 10, 8, 21, tzinfo=TZ),
             "Концерт", "Фортепиано")
-    cal.add("cal-piano", datetime(2026, 10, 8, 10, tzinfo=TZ), datetime(2026, 10, 8, 11, tzinfo=TZ), "Секрет")
+    cal.add("cal-piano", datetime(2026, 10, 8, 10, tzinfo=TZ), datetime(2026, 10, 8, 11, tzinfo=TZ),
+            "⏳ Секрет (заявка)", from_bot=True)
     cal.add("cal-workshop", datetime(2026, 10, 8, 19, tzinfo=TZ), datetime(2026, 10, 8, 20, tzinfo=TZ),
-            "🎭 Лекция Вадим")
-    cal.add("cal-workshop", datetime(2026, 10, 8, 12, tzinfo=TZ), datetime(2026, 10, 8, 13, tzinfo=TZ), "Анна")
+            "Лекция Вадим")
+    cal.add("cal-workshop", datetime(2026, 10, 8, 12, tzinfo=TZ), datetime(2026, 10, 8, 13, tzinfo=TZ),
+            "Анна", from_bot=True)
 
     async def scenario():
         await send(dp, bot, CLIENT, kb.BTN_AFISHA)
@@ -342,27 +347,3 @@ def test_overview_and_afisha(env):
 
     asyncio.run(scenario())
 
-
-def test_client_name_cannot_become_event(env):
-    cfg, cal, svc, session, bot, dp = env
-    Clock.now = datetime(2026, 10, 6, 12, 0, tzinfo=TZ)
-
-    async def scenario():
-        await send(dp, bot, CLIENT, kb.BTN_BOOK)
-        await press(dp, bot, CLIENT, kb.ResCB(key="piano"))
-        await press(dp, bot, CLIENT, kb.DayCB(mode="b", day="20261007"))
-        await press(dp, bot, CLIENT, kb.StartCB(hhmm="1000"))
-        await press(dp, bot, CLIENT, kb.DurCB(minutes=30))
-        await send(dp, bot, CLIENT, "🎭 Концерт")
-        await send(dp, bot, CLIENT, "+995 555 12 34 56")
-        await send(dp, bot, CLIENT, "1")
-        await send(dp, bot, CLIENT, kb.BTN_SKIP)
-        await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
-        await press(dp, bot, ADMIN, kb.AdminCB(action="ok", id=1))
-        b = svc.db.get(1)
-        assert b.name == "Концерт" and b.status == dbm.APPROVED
-        assert cal.event_title(cal.events["cal-piano"][b.event_id].summary) is None
-        items = await cal.afisha(Clock.now, Clock.now + timedelta(days=30))
-        assert items == []
-
-    asyncio.run(scenario())

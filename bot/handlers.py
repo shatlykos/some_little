@@ -338,10 +338,8 @@ async def on_duration(cb: CallbackQuery, callback_data: kb.DurCB, state: FSMCont
 
 
 @router.message(Book.name, F.text)
-async def ask_phone(msg: Message, state: FSMContext, cfg: Config) -> None:
+async def ask_phone(msg: Message, state: FSMContext) -> None:
     name = msg.text.strip()
-    for marker in cfg.event_markers:
-        name = name.replace(marker, "").strip()
     if not 2 <= len(name) <= 60:
         return await msg.answer("Пожалуйста, введите имя (от 2 до 60 символов).")
     await state.update_data(name=name)

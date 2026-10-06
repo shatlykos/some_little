@@ -29,6 +29,7 @@ class CalEvent:
     start: datetime
     end: datetime
     all_day: bool
+    from_bot: bool = False  # бронь клиента, созданная ботом (имя скрываем)
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,8 @@ class Calendar:
                         start=start,
                         end=end,
                         all_day=all_day,
+                        from_bot="booking_id"
+                        in e.get("extendedProperties", {}).get("private", {}),
                     )
                 )
             page = resp.get("nextPageToken")
@@ -164,21 +167,13 @@ class Calendar:
         loc = location.lower()
         return any(alias in loc for alias in resource.aliases)
 
-    def event_title(self, summary: str) -> str | None:
-        """Если событие — публичное мероприятие (в названии есть 🎭),
-        возвращает название без значка. Иначе None (частная бронь)."""
-        text = (summary or "").strip()
-        found = False
-        for marker in self.cfg.event_markers:
-            idx = text.lower().find(marker.lower())
-            while idx != -1:
-                found = True
-                text = text[:idx] + text[idx + len(marker):]
-                idx = text.lower().find(marker.lower())
-        if not found:
+    def event_title(self, e: CalEvent) -> str | None:
+        """Название, которое видят клиенты. Брони клиентов, созданные ботом, —
+        None (показываем «занято»). Всё, что внесено в календарь вручную, —
+        мероприятие с названием."""
+        if e.from_bot:
             return None
-        text = " ".join(text.replace("\ufe0f", "").split()).strip(" :—-")
-        return text or "Мероприятие"
+        return " ".join((e.summary or "").split()) or "Мероприятие"
 
     def resource_by_location(self, location: str) -> Resource | None:
         if not location:
@@ -186,8 +181,8 @@ class Calendar:
         return next((r for r in self.cfg.resources if self.location_matches(r, location)), None)
 
     async def afisha(self, t_min: datetime, t_max: datetime) -> list[AfishaItem]:
-        """Все мероприятия: события с 🎭 в календарях помещений
-        + все события календаря-афиши (Galaxy Book)."""
+        """Все мероприятия: события календарей помещений, внесённые вручную
+        (не брони клиентов из бота), + события календаря-афиши (Galaxy Book)."""
         calendars = [(r, r.calendar_id) for r in self.cfg.resources]
         calendars.append((None, self.cfg.events_calendar_id))
         results = await asyncio.gather(
@@ -196,21 +191,20 @@ class Calendar:
         items: list[AfishaItem] = []
         for (resource, _), events in zip(calendars, results):
             for e in events:
+                title = self.event_title(e)
+                if title is None:
+                    continue  # бронь клиента — в афишу не попадает
                 if resource is not None:
-                    title = self.event_title(e.summary)
-                    if title is None:
-                        continue  # частная бронь — в афишу не попадает
                     items.append(AfishaItem(e.start, e.end, e.all_day, title, resource, ""))
                 else:
-                    title = self.event_title(e.summary) or e.summary or "Мероприятие"
                     res = self.resource_by_location(e.location)
                     items.append(AfishaItem(e.start, e.end, e.all_day, title, res, e.location))
         items.sort(key=lambda i: (i.start, i.end))
         return items
 
     async def busy_for_day(self, resource: Resource, day: date) -> list[Busy]:
-        """Занятость ресурса за сутки: события его календаря (частные брони —
-        анонимно, мероприятия с 🎭 — с названием) + события календаря-афиши,
+        """Занятость ресурса за сутки: события его календаря (брони клиентов из
+        бота — анонимно, остальное — с названием) + события календаря-афиши,
         где в «Месте» указан этот ресурс."""
         t_min = datetime.combine(day, time(0), self.tz)
         t_max = t_min + timedelta(days=1)
@@ -218,9 +212,9 @@ class Calendar:
             self.list_events(resource.calendar_id, t_min, t_max),
             self.list_events(self.cfg.events_calendar_id, t_min, t_max),
         )
-        busy = [Busy(e.start, e.end, self.event_title(e.summary)) for e in own]
+        busy = [Busy(e.start, e.end, self.event_title(e)) for e in own]
         busy += [
-            Busy(e.start, e.end, self.event_title(e.summary) or e.summary or "Мероприятие")
+            Busy(e.start, e.end, self.event_title(e))
             for e in events
             if self.location_matches(resource, e.location)
         ]

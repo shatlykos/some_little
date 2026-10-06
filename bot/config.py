@@ -44,7 +44,6 @@ class Config:
     events_calendar_name: str
     resources: tuple[Resource, ...]
     db_path: Path
-    event_markers: tuple[str, ...] = ("🎭",)
 
     def resource(self, key: str) -> Resource:
         for r in self.resources:
@@ -118,5 +117,4 @@ def load_config(path: Path | None = None) -> Config:
         events_calendar_name=raw["events_calendar"].get("name", "Афиша"),
         resources=resources,
         db_path=ROOT / "bookings.db",
-        event_markers=tuple(str(m) for m in raw.get("event_markers", ["🎭"]) if str(m).strip()),
     )
