@@ -160,7 +160,7 @@ def back_kb(text: str, to: str) -> InlineKeyboardMarkup:
 def overview_kb(resources: tuple[Resource, ...], day: date) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for r in resources:
-        kb.button(text=f"Забронировать: {r.title}", callback_data=ResCB(key=r.key, day=ymd(day)))
+        kb.button(text=f"➕ {r.title}", callback_data=ResCB(key=r.key, day=ymd(day)))
     kb.button(text="⬅️ Другой день", callback_data=NavCB(to="vdays"))
     kb.adjust(1)
     return kb.as_markup()

@@ -150,6 +150,7 @@ async def _show_overview(cb: CallbackQuery, svc: Service, cfg: Config, day) -> N
     parts = [f"<b>Занятость: {day_long(day)}</b>"]
     for r, (busy, o, c) in zip(cfg.resources, results):
         parts.append(f"\n<b>{r.title}</b>\n" + svc.describe_day(r, day, busy, o, c, header=False))
+    parts.append("\n<b>Забронировать:</b>")
     await cb.message.edit_text("\n".join(parts), reply_markup=kb.overview_kb(cfg.resources, day))
 
 
