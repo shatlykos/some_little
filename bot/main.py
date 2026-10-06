@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNotFound, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import ROOT, load_config
@@ -38,8 +39,16 @@ async def run() -> None:
     dp["svc"] = svc
     dp.include_router(router)
 
+    try:
+        me = await bot.get_me()
+    except (TelegramNotFound, TelegramUnauthorizedError):
+        await bot.session.close()
+        raise SystemExit(
+            "Telegram не принял BOT_TOKEN из .env. Скопируйте токен из @BotFather "
+            "заново (/mybots → ваш бот → API Token)."
+        )
     reminders = asyncio.create_task(reminders_loop(bot, svc, cfg))
-    logging.info("Бот запущен")
+    logging.info("Бот @%s запущен", me.username)
     try:
         await dp.start_polling(bot)
     finally:
@@ -50,9 +59,8 @@ async def run() -> None:
 def main() -> None:
     try:
         asyncio.run(run())
-    except (KeyboardInterrupt, SystemExit) as e:
-        if isinstance(e, SystemExit) and e.code not in (None, 0):
-            raise
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

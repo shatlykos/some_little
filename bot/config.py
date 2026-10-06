@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import time, timedelta
 from pathlib import Path
@@ -72,10 +73,17 @@ def load_config(path: Path | None = None) -> Config:
             "Отступы — только пробелами, как в config.example.yaml."
         ) from None
 
-    token = os.environ.get("BOT_TOKEN", "").strip()
-    admin = os.environ.get("ADMIN_ID", "").strip()
+    token = os.environ.get("BOT_TOKEN", "").strip().strip("'\"").strip()
+    admin = os.environ.get("ADMIN_ID", "").strip().strip("'\"").strip()
     if not token or not admin:
         raise SystemExit("Заполните BOT_TOKEN и ADMIN_ID в файле .env")
+    if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", token) or token.startswith("123456789:"):
+        raise SystemExit(
+            "BOT_TOKEN в .env записан неверно. Скопируйте токен из @BotFather целиком, "
+            "вида 7712345678:AAH..., без пробелов и кавычек."
+        )
+    if not admin.isdigit():
+        raise SystemExit("ADMIN_ID в .env должен состоять только из цифр (ваш Id из @userinfobot).")
 
     resources = tuple(
         Resource(
