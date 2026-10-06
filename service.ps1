@@ -19,6 +19,26 @@ function Show-Log {
 
 function Get-Task { Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue }
 
+function Get-BotProcess {
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+        Where-Object { $_.CommandLine -like "*-m bot*" }
+}
+
+function Test-Running { [bool](Get-BotProcess) }
+
+function Stop-Bot { Get-BotProcess | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
+
+# Ждём, пока процесс бота появится, затем ещё 10 секунд проверяем, что он не упал
+# (ошибка в .env, config.yaml или доступе к Google). Если упал — показываем bot.log.
+function Wait-Running {
+    for ($i = 0; $i -lt 20 -and -not (Test-Running); $i++) { Start-Sleep -Seconds 1 }
+    for ($i = 0; $i -lt 10 -and (Test-Running); $i++) { Start-Sleep -Seconds 1 }
+    if (-not (Test-Running)) {
+        Show-Log
+        throw "Бот не запустился — причина в последних строках bot.log выше."
+    }
+}
+
 try {
     switch ($Action) {
         "install" {
@@ -33,34 +53,27 @@ try {
             Register-ScheduledTask -TaskName $Name -Action $act -Trigger $trigger `
                 -Settings $settings -Principal $principal -Force | Out-Null
             Start-ScheduledTask -TaskName $Name
-            Start-Sleep -Seconds 8
+            Wait-Running
             Write-Host "Готово: бот работает в фоне и будет запускаться сам при включении сервера." -ForegroundColor Green
-            Write-Host "Окно run.bat больше не нужно (и не запускайте его одновременно с фоновым ботом)."
-            Show-Log
         }
         "remove" {
             if (Get-Task) {
                 Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
                 Unregister-ScheduledTask -TaskName $Name -Confirm:$false
             }
-            Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-                Where-Object { $_.CommandLine -like "*-m bot*" } |
-                ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+            Stop-Bot
             Write-Host "Автозапуск выключен, фоновый бот остановлен." -ForegroundColor Yellow
         }
         "start" {
             if (-not (Get-Task)) { throw "Фоновый режим не включён. Запустите background_on.bat" }
             Start-ScheduledTask -TaskName $Name
-            Start-Sleep -Seconds 8
+            Wait-Running
             Write-Host "Бот запущен в фоне." -ForegroundColor Green
-            Show-Log
         }
         "stop" {
             if (Get-Task) { Stop-ScheduledTask -TaskName $Name }
-            Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-                Where-Object { $_.CommandLine -like "*-m bot*" } |
-                ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-            Write-Host "Бот остановлен (автозапуск при включении сервера остаётся)." -ForegroundColor Yellow
+            Stop-Bot
+            Write-Host "Бот остановлен." -ForegroundColor Yellow
         }
         default {
             $t = Get-Task
@@ -68,9 +81,7 @@ try {
                 Write-Host "Фоновый режим не включён." -ForegroundColor Yellow
             } else {
                 $state = $t.State
-                $running = [bool](Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-                    Where-Object { $_.CommandLine -like "*-m bot*" })
-                if ($running) { Write-Host "Бот работает в фоне." -ForegroundColor Green }
+                if (Test-Running) { Write-Host "Бот работает в фоне." -ForegroundColor Green }
                 else { Write-Host "Бот НЕ работает (задание: $state). Смотрите bot.log ниже." -ForegroundColor Red }
             }
             Show-Log
@@ -78,5 +89,5 @@ try {
     }
 } catch {
     Write-Host "Ошибка: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
 }
-Read-Host "`nНажмите Enter, чтобы закрыть"
