@@ -82,8 +82,6 @@ class Calendar:
             for e in resp.get("items", []):
                 if e.get("status") == "cancelled":
                     continue
-                if e.get("transparency") == "transparent":  # помечено «Свободен»
-                    continue
                 start, all_day = self._parse_dt(e["start"])
                 end, _ = self._parse_dt(e["end"])
                 out.append(
