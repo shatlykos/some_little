@@ -82,7 +82,11 @@ class AdminCB(CallbackData, prefix="a"):
 
 
 class AfishaCB(CallbackData, prefix="f"):
-    key: str = ""  # пусто — все места
+    key: str  # ключ помещения, AFISHA_ALL — все помещения, AFISHA_MENU — выбор помещения
+
+
+AFISHA_ALL = "all"
+AFISHA_MENU = "menu"
 
 
 class CancelCB(CallbackData, prefix="x"):
@@ -170,14 +174,18 @@ def overview_kb(resources: tuple[Resource, ...], day: date) -> InlineKeyboardMar
     return kb.as_markup()
 
 
-def afisha_kb(resources: tuple[Resource, ...], selected: str) -> InlineKeyboardMarkup:
+def afisha_menu_kb(resources: tuple[Resource, ...]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for r in resources:
-        mark = "• " if r.key == selected else ""
-        kb.button(text=f"{mark}{r.title}", callback_data=AfishaCB(key=r.key))
-    kb.button(text=("• " if not selected else "") + "Все места", callback_data=AfishaCB(key=""))
-    kb.adjust(2)
+        kb.button(text=r.title, callback_data=AfishaCB(key=r.key))
+    kb.button(text="🏢 Все помещения", callback_data=AfishaCB(key=AFISHA_ALL))
+    kb.adjust(*([2] * (len(resources) // 2)), *([1] * (len(resources) % 2)), 1)
     return kb.as_markup()
+
+
+def afisha_back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="⬅️ Другое помещение", callback_data=AfishaCB(key=AFISHA_MENU).pack())]])
 
 
 def my_booking_kb(booking_id: int) -> InlineKeyboardMarkup:

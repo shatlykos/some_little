@@ -109,19 +109,22 @@ async def menu_view(msg: Message, state: FSMContext, svc: Service) -> None:
     )
 
 
+AFISHA_MENU_TEXT = "<b>🎭 Афиша</b>\nВыберите помещение:"
+
+
 async def _afisha_text(svc: Service, cfg: Config, key: str) -> str:
     now = svc.now()
     items = await svc.cal.afisha(now, now + timedelta(days=cfg.horizon_days))
     items = [i for i in items if i.end > now]
     resource = None
-    if key:
+    if key != kb.AFISHA_ALL:
         try:
             resource = cfg.resource(key)
         except KeyError:
-            key = ""
+            pass
         items = [i for i in items if resource and i.resource == resource]
 
-    header = f"<b>🎭 Афиша: {resource.title}</b>" if resource else "<b>🎭 Ближайшие мероприятия</b>"
+    header = f"<b>🎭 Афиша: {resource.title}</b>" if resource else "<b>🎭 Афиша: все помещения</b>"
     if not items:
         return header + "\n\nВ ближайшие дни мероприятий не запланировано."
     lines = [header]
@@ -146,17 +149,20 @@ async def _afisha_text(svc: Service, cfg: Config, key: str) -> str:
 
 
 @router.message(F.text == kb.BTN_AFISHA)
-async def menu_afisha(msg: Message, svc: Service, cfg: Config) -> None:
-    await msg.answer(await _afisha_text(svc, cfg, ""), reply_markup=kb.afisha_kb(cfg.resources, ""))
+async def menu_afisha(msg: Message, cfg: Config) -> None:
+    await msg.answer(AFISHA_MENU_TEXT, reply_markup=kb.afisha_menu_kb(cfg.resources))
 
 
 @router.callback_query(kb.AfishaCB.filter())
 async def on_afisha_filter(cb: CallbackQuery, callback_data: kb.AfishaCB,
                            svc: Service, cfg: Config) -> None:
     await cb.answer()
-    text = await _afisha_text(svc, cfg, callback_data.key)
+    if callback_data.key == kb.AFISHA_MENU:
+        text, markup = AFISHA_MENU_TEXT, kb.afisha_menu_kb(cfg.resources)
+    else:
+        text, markup = await _afisha_text(svc, cfg, callback_data.key), kb.afisha_back_kb()
     try:
-        await cb.message.edit_text(text, reply_markup=kb.afisha_kb(cfg.resources, callback_data.key))
+        await cb.message.edit_text(text, reply_markup=markup)
     except TelegramBadRequest as e:
         if "not modified" not in str(e):
             raise

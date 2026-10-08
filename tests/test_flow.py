@@ -309,7 +309,12 @@ def test_overview_and_afisha(env):
 
     async def scenario():
         await send(dp, bot, CLIENT, kb.BTN_AFISHA)
+        assert "Выберите помещение" in session.sent[-1].text
+        labels = [b.text for b in buttons(session.last_markup())]
+        assert labels[-1] == "🏢 Все помещения" and "🎹 Фортепиано" in labels
+        await press(dp, bot, CLIENT, kb.AfishaCB(key=kb.AFISHA_ALL))
         text = session.sent[-1].text
+        assert "Афиша: все помещения" in text
         assert "Концерт · 🎹 Фортепиано" in text
         assert "Лекция Вадим · 🎨 Творческая мастерская" in text  # из календаря помещения
         assert "Секрет" not in text and "Анна" not in text  # брони клиентов из бота — не в афише
@@ -318,6 +323,8 @@ def test_overview_and_afisha(env):
         text = session.sent[-1].text
         assert "Афиша: 🎨 Творческая мастерская" in text
         assert "Лекция Вадим" in text and "Концерт" not in text
+        await press(dp, bot, CLIENT, kb.AfishaCB(key=kb.AFISHA_MENU))
+        assert "Выберите помещение" in session.sent[-1].text
         await press(dp, bot, CLIENT, kb.AfishaCB(key="piano"))
         assert "Концерт" in session.sent[-1].text and "Лекция" not in session.sent[-1].text
 
