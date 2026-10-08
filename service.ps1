@@ -28,11 +28,11 @@ function Test-Running { [bool](Get-BotProcess) }
 
 function Stop-Bot { Get-BotProcess | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
 
-# Ждём, пока процесс бота появится, затем ещё 10 секунд проверяем, что он не упал
+# Ждём, пока процесс бота появится, затем ещё 3 секунды проверяем, что он не упал
 # (ошибка в .env, config.yaml или доступе к Google). Если упал — показываем bot.log.
 function Wait-Running {
-    for ($i = 0; $i -lt 20 -and -not (Test-Running); $i++) { Start-Sleep -Seconds 1 }
-    for ($i = 0; $i -lt 10 -and (Test-Running); $i++) { Start-Sleep -Seconds 1 }
+    for ($i = 0; $i -lt 40 -and -not (Test-Running); $i++) { Start-Sleep -Milliseconds 250 }
+    for ($i = 0; $i -lt 12 -and (Test-Running); $i++) { Start-Sleep -Milliseconds 250 }
     if (-not (Test-Running)) {
         Show-Log
         throw "Бот не запустился — причина в последних строках bot.log выше."
