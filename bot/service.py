@@ -131,7 +131,7 @@ class Service:
         summary = f"⏳ {name} (заявка)" if pending else name
         username = getattr(b, "username", None)
         desc = [
-            f"Телефон: {b.phone}",
+            f"Контакт: {b.phone}",
             f"Человек: {b.people}",
         ]
         if b.comment:

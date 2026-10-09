@@ -43,8 +43,13 @@ def reply(*buttons: KeyboardButton | str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def phone_kb() -> ReplyKeyboardMarkup:
-    return reply(KeyboardButton(text="📱 Отправить мой номер", request_contact=True))
+def phone_kb(username: str | None = None) -> ReplyKeyboardMarkup:
+    buttons: list[KeyboardButton | str] = [
+        KeyboardButton(text="📱 Отправить мой номер", request_contact=True)
+    ]
+    if username:
+        buttons.append(f"@{username}")
+    return reply(*buttons)
 
 
 # ---------- callback data ----------

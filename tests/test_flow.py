@@ -354,3 +354,27 @@ def test_overview_and_afisha(env):
 
     asyncio.run(scenario())
 
+
+
+def test_contact_can_be_telegram_username(env):
+    cfg, cal, svc, session, bot, dp = env
+    Clock.now = datetime(2026, 10, 6, 12, 0, tzinfo=TZ)
+
+    async def scenario():
+        await send(dp, bot, CLIENT, kb.BTN_BOOK)
+        await press(dp, bot, CLIENT, kb.ResCB(key="piano"))
+        await press(dp, bot, CLIENT, kb.DayCB(mode="b", day="20261007"))
+        await press(dp, bot, CLIENT, kb.StartCB(hhmm="1000"))
+        await press(dp, bot, CLIENT, kb.DurCB(minutes=30))
+        await send(dp, bot, CLIENT, "Катя Д")
+        await send(dp, bot, CLIENT, "просто текст")
+        assert "Не получилось распознать" in session.sent[-1].text
+        await send(dp, bot, CLIENT, "@psihology_ot_Apsitis")
+        assert "Сколько будет человек" in session.sent[-1].text
+        await send(dp, bot, CLIENT, "2")
+        await send(dp, bot, CLIENT, kb.BTN_SKIP)
+        assert "📞 @psihology_ot_Apsitis" in session.sent[-1].text
+        await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
+        assert svc.db.get(1).phone == "@psihology_ot_Apsitis"
+
+    asyncio.run(scenario())

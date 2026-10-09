@@ -49,7 +49,7 @@ def booking_card(cfg: Config, b: Booking, with_contacts: bool = True) -> str:
     if with_contacts:
         lines += [
             f"👤 {q(b.name)}",
-            f"📱 {q(b.phone)}",
+            f"📞 {q(b.phone)}",
             f"👥 {b.people} чел.",
         ]
         if b.comment:
@@ -351,12 +351,15 @@ async def ask_phone(msg: Message, state: FSMContext) -> None:
     await state.update_data(name=name)
     await state.set_state(Book.phone)
     await msg.answer(
-        "Ваш номер телефона? Нажмите кнопку ниже или введите вручную.",
-        reply_markup=kb.phone_kb(),
+        "Как с вами связаться? Отправьте номер телефона или Telegram-ник (@username) — "
+        "кнопкой ниже или вручную.",
+        reply_markup=kb.phone_kb(msg.from_user.username),
     )
 
 
 PHONE_RE = re.compile(r"^\+?[\d\s\-()]{7,20}$")
+# @username, t.me/username или https://t.me/username
+USERNAME_RE = re.compile(r"^(?:@|(?:https?://)?t\.me/)([A-Za-z][A-Za-z0-9_]{3,31})/?$")
 
 
 @router.message(Book.phone, F.contact)
@@ -367,10 +370,17 @@ async def ask_people(msg: Message, state: FSMContext) -> None:
         if not phone.startswith("+"):
             phone = "+" + phone
     else:
-        phone = msg.text.strip()
-        digits = re.sub(r"\D", "", phone)
-        if not PHONE_RE.match(phone) or not 7 <= len(digits) <= 15:
-            return await msg.answer("Номер выглядит неверно. Пример: +995 555 12 34 56")
+        text = msg.text.strip()
+        username = USERNAME_RE.match(text)
+        if username:
+            phone = "@" + username.group(1)
+        elif PHONE_RE.match(text) and 7 <= len(re.sub(r"\D", "", text)) <= 15:
+            phone = text
+        else:
+            return await msg.answer(
+                "Не получилось распознать. Пример номера: +995 555 12 34 56, "
+                "или Telegram-ник: @username"
+            )
     await state.update_data(phone=phone)
     await state.set_state(Book.people)
     await msg.answer("Сколько будет человек?", reply_markup=kb.reply("1", "2", "3"))
@@ -414,7 +424,7 @@ async def ask_confirm(msg: Message, state: FSMContext, svc: Service, cfg: Config
         f"📅 {day_long(day)}",
         f"🕐 {span(slot.start, slot.end)}",
         f"👤 {q(data['name'])}",
-        f"📱 {q(data['phone'])}",
+        f"📞 {q(data['phone'])}",
         f"👥 {data['people']} чел.",
     ]
     if comment:
