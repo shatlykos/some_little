@@ -120,7 +120,11 @@ class Service:
                     has_free = True
         rows.sort(key=lambda r: r[0])
 
-        lines = [f"<b>{resource.title}</b>", f"<i>{day_long(d)}</i>"] if header else []
+        lines = [f"<b>{resource.title}</b>"] if header else []
+        if header and resource.note:
+            lines.append(f"<i>{q(resource.note)}</i>")
+        if header:
+            lines.append(f"<i>{day_long(d)}</i>")
         lines += [text for _, text in rows]
         if not has_free:
             lines.append("Свободного времени нет")

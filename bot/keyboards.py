@@ -12,7 +12,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .config import Resource
-from .fmt import day_short, duration, hm, span
+from .fmt import day_short, duration, hm, span, weeks_word
 from .slots import Slot
 
 # ---------- главное меню ----------
@@ -220,7 +220,8 @@ def my_booking_kb(booking_id: int) -> InlineKeyboardMarkup:
 def repeat_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for w in REPEAT_OPTIONS:
-        text = "Один раз" if w == 1 else f"🔁 Каждую неделю × {w}"
+        months = {4: "≈ месяц", 8: "≈ 2 месяца", 12: "≈ 3 месяца"}.get(w)
+        text = "Один раз" if w == 1 else f"🔁 Раз в неделю — {w} {weeks_word(w)}" + (f" ({months})" if months else "")
         kb.button(text=text, callback_data=RepeatCB(weeks=w))
     kb.adjust(1)
     return kb.as_markup()

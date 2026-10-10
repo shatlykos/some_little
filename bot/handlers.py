@@ -16,7 +16,7 @@ from . import db as dbm
 from . import keyboards as kb
 from .config import Config, Resource
 from .db import Booking
-from .fmt import day_long, day_short, duration, hm, q, span
+from .fmt import day_long, day_short, duration, hm, q, span, weeks_word
 from .service import NewBooking, Service, SlotTaken
 
 log = logging.getLogger(__name__)
@@ -88,6 +88,17 @@ def booking_card(cfg: Config, b: Booking, with_contacts: bool = True) -> str:
     return "\n".join(lines)
 
 
+def client_notes(cfg: Config, resource: Resource) -> str:
+    """Пометка помещения (например, «входит телевизор») и общие правила."""
+    parts = [p for p in (resource.note, cfg.rules) if p]
+    return "\n".join(f"<i>{q(p)}</i>" for p in parts)
+
+
+def with_notes(text: str, cfg: Config, resource: Resource) -> str:
+    notes = client_notes(cfg, resource)
+    return f"{text}\n\n{notes}" if notes else text
+
+
 def group_card(cfg: Config, items: list[Booking], with_contacts: bool = True) -> str:
     """Карточка одной брони или целой серии (список дат со статусами)."""
     if len(items) == 1:
@@ -95,7 +106,7 @@ def group_card(cfg: Config, items: list[Booking], with_contacts: bool = True) ->
     first = items[0]
     r = cfg.resource(first.resource_key)
     lines = [
-        f"<b>Заявка #{first.id}</b> — 🔁 каждую неделю, {len(items)} раз",
+        f"<b>Заявка #{first.id}</b> — 🔁 раз в неделю, {len(items)} {weeks_word(len(items))}",
         f"{r.title}",
     ]
     for b in items:
@@ -132,6 +143,8 @@ async def cmd_start(msg: Message, state: FSMContext, cfg: Config) -> None:
         "и оставить заявку на бронь.\n\n"
         "Минимальное время аренды — 1 час, фортепиано — 30 минут."
     )
+    if cfg.rules:
+        text += f"\n\n<i>{q(cfg.rules)}</i>"
     if msg.from_user.id == cfg.admin_id:
         text += "\n\n<i>Вы администратор. /pending — заявки, ожидающие решения.</i>"
     await msg.answer(text, reply_markup=kb.main_menu())
@@ -482,7 +495,9 @@ async def ask_repeat(msg: Message, state: FSMContext) -> None:
     await state.update_data(comment=comment)
     await state.set_state(Book.repeat)
     await msg.answer("Почти готово!", reply_markup=ReplyKeyboardRemove())
-    await msg.answer("Повторять бронь каждую неделю в это же время?", reply_markup=kb.repeat_kb())
+    await msg.answer(
+        "Повторять бронь каждую неделю в тот же день и время?", reply_markup=kb.repeat_kb()
+    )
 
 
 @router.callback_query(Book.repeat, kb.RepeatCB.filter())
@@ -508,7 +523,7 @@ async def ask_confirm(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMC
         slot = preview[0][1]
         lines += [f"📅 {day_long(slot.start.date())}", f"🕐 {span(slot.start, slot.end)}"]
     else:
-        lines.append(f"🔁 Каждую неделю, {len(preview)} раз:")
+        lines.append(f"🔁 Раз в неделю, {len(preview)} {weeks_word(len(preview))} подряд:")
         for start, slot in preview:
             if slot:
                 lines.append(f"✅ {day_short(start.date())}, {span(slot.start, slot.end)}")
@@ -521,7 +536,7 @@ async def ask_confirm(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMC
     ]
     if data.get("comment"):
         lines.append(f"💬 {q(data['comment'])}")
-    await cb.message.edit_text("\n".join(lines), reply_markup=kb.confirm_kb())
+    await cb.message.edit_text(with_notes("\n".join(lines), cfg, resource), reply_markup=kb.confirm_kb())
 
 
 @router.callback_query(Book.confirm, kb.ConfirmCB.filter())
@@ -546,7 +561,7 @@ async def on_confirm(cb: CallbackQuery, callback_data: kb.ConfirmCB, state: FSMC
 
     text = group_card(cfg, items)
     if len(items) < nb.weeks:
-        text += f"\n\nЗанятые даты пропущены: оформлено {len(items)} из {nb.weeks}."
+        text += f"\n\nЗанятые даты пропущены: оформлено {len(items)} из {nb.weeks} недель."
     text += "\n\nЗаявка отправлена администратору."
     partner = nb.contact_username if nb.contact_username != (cb.from_user.username or "").lower() else None
     if partner and nb.user_id != cb.from_user.id:
@@ -664,9 +679,12 @@ async def on_admin(cb: CallbackQuery, callback_data: kb.AdminCB, svc: Service, c
     recipients = {first.user_id}
     if first.booked_by and first.booked_by != cfg.admin_id:
         recipients.add(first.booked_by)
+    message = client_text + "\n\n" + group_card(cfg, done, with_contacts=False)
+    if callback_data.action == "ok":
+        message = with_notes(message, cfg, cfg.resource(first.resource_key))
     for uid in recipients:
         try:
-            await cb.bot.send_message(uid, client_text + "\n\n" + group_card(cfg, done, with_contacts=False))
+            await cb.bot.send_message(uid, message)
         except Exception:
             log.exception("Не удалось уведомить клиента %s", uid)
 

@@ -121,7 +121,8 @@ class Clock:
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch):
     res = (
-        Resource("workshop", "Творческая мастерская", "🎨", "cal-workshop", timedelta(hours=1), ("мастерская",)),
+        Resource("workshop", "Творческая мастерская", "🎨", "cal-workshop", timedelta(hours=1), ("мастерская",),
+                 "📺 В аренду входит телевизор."),
         Resource("piano", "Фортепиано", "🎹", "cal-piano", timedelta(minutes=30), ("фортепиано",)),
     )
     cfg = Config(
@@ -451,16 +452,19 @@ def test_weekly_series(env):
         await send(dp, bot, CLIENT, "7")
         await send(dp, bot, CLIENT, kb.BTN_SKIP)
         labels = [b.text for b in buttons(session.last_markup())]
-        assert labels[0] == "Один раз" and "🔁 Каждую неделю × 4" in labels
+        assert labels[0] == "Один раз" and "🔁 Раз в неделю — 4 недели (≈ месяц)" in labels
         await press(dp, bot, CLIENT, kb.RepeatCB(weeks=4))
         preview = session.sent[-1].text
         assert "❌ пн 19 окт — занято, пропустим" in preview and "✅ пн 2 ноя" in preview
         await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
         items = svc.db.series(1)
         assert [b.start.day for b in items] == [12, 26, 2]
-        assert "оформлено 3 из 4" in [t for t in session.texts(CLIENT) if "Заявка #1" in t][-1]
+        assert "оформлено 3 из 4 недель" in [t for t in session.texts(CLIENT) if "Заявка #1" in t][-1]
         await press(dp, bot, ADMIN, kb.AdminCB(action="ok", id=1))
         assert all(b.status == dbm.APPROVED for b in svc.db.series(1))
+        approved = [t for t in session.texts(CLIENT) if "подтверждена" in t][-1]
+        assert "📺 В аренду входит телевизор." in approved and "еду и напитки" in approved
+        assert "раз в неделю, 3 недели" in approved
         assert all(e.summary == "Анна" for e in cal.events["cal-workshop"].values() if e.from_bot)
         # отмена одной даты серии не трогает остальные
         await press(dp, bot, CLIENT, kb.CancelCB(action="yes", id=items[1].id))

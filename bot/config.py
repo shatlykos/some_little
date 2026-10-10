@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Тексты по умолчанию — работают, даже если в config.yaml их нет.
+DEFAULT_RULES = "🍽 Пожалуйста, не приносите с собой еду и напитки."
+DEFAULT_NOTES = {"workshop": "📺 В аренду входит телевизор."}
+
 
 @dataclass(frozen=True)
 class Resource:
@@ -21,6 +25,7 @@ class Resource:
     calendar_id: str
     min_duration: timedelta
     aliases: tuple[str, ...]
+    note: str = ""  # что входит в аренду и т. п. — показывается клиенту
 
     @property
     def title(self) -> str:
@@ -44,6 +49,7 @@ class Config:
     events_calendar_name: str
     resources: tuple[Resource, ...]
     db_path: Path
+    rules: str = DEFAULT_RULES  # общие правила — показываются клиенту
 
     def resource(self, key: str) -> Resource:
         for r in self.resources:
@@ -93,6 +99,7 @@ def load_config(path: Path | None = None) -> Config:
             calendar_id=str(r["calendar_id"]).strip(),
             min_duration=timedelta(minutes=int(r["min_minutes"])),
             aliases=tuple(a.lower() for a in r.get("aliases", [r["name"]])),
+            note=str(r.get("note", DEFAULT_NOTES.get(r["key"], "")) or "").strip(),
         )
         for r in raw["resources"]
     )
@@ -117,4 +124,5 @@ def load_config(path: Path | None = None) -> Config:
         events_calendar_name=raw["events_calendar"].get("name", "Афиша"),
         resources=resources,
         db_path=ROOT / "bookings.db",
+        rules=str(raw.get("rules", DEFAULT_RULES) or "").strip(),
     )

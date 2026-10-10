@@ -42,3 +42,11 @@ def duration(td: timedelta) -> str:
 def q(text: str | None) -> str:
     """Экранирование пользовательского текста для parse_mode=HTML."""
     return escape(text or "")
+
+
+def weeks_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "неделя"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "недели"
+    return "недель"
