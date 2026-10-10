@@ -9,7 +9,8 @@ rem при необходимости доустановить библиоте�
 rem Всё в одном блоке ( ): git pull может изменить и этот файл, а блок читается целиком заранее.
 (
   for /f %%i in ('git rev-parse HEAD') do set OLD=%%i
-  git pull -q || goto :error
+  rem gc.auto=0 — без автоуборки git: на Windows она спрашивает «Unlink of file ... failed».
+  git -c gc.auto=0 pull -q || goto :error
   for /f %%i in ('git rev-parse HEAD') do set NEW=%%i
   call :apply || goto :error
   exit /b 0
