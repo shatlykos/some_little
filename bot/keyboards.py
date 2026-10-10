@@ -43,6 +43,17 @@ def reply(*buttons: KeyboardButton | str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def people_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=str(n)) for n in range(1, 6)],
+            [KeyboardButton(text=str(n)) for n in range(6, 11)],
+            [KeyboardButton(text=BTN_CANCEL)],
+        ],
+        resize_keyboard=True,
+    )
+
+
 def phone_kb(username: str | None = None) -> ReplyKeyboardMarkup:
     buttons: list[KeyboardButton | str] = [
         KeyboardButton(text="📱 Отправить мой номер", request_contact=True)
@@ -75,6 +86,13 @@ class DurCB(CallbackData, prefix="u"):
 
 class NavCB(CallbackData, prefix="n"):
     to: str  # "res" | "days" | "starts" | "vdays"
+
+
+class RepeatCB(CallbackData, prefix="w"):
+    weeks: int  # 1 — один раз
+
+
+REPEAT_OPTIONS = (1, 4, 8, 12)
 
 
 class ConfirmCB(CallbackData, prefix="c"):
@@ -196,6 +214,15 @@ def afisha_back_kb() -> InlineKeyboardMarkup:
 def my_booking_kb(booking_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="❌ Отменить бронь", callback_data=CancelCB(action="ask", id=booking_id))
+    return kb.as_markup()
+
+
+def repeat_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for w in REPEAT_OPTIONS:
+        text = "Один раз" if w == 1 else f"🔁 Каждую неделю × {w}"
+        kb.button(text=text, callback_data=RepeatCB(weeks=w))
+    kb.adjust(1)
     return kb.as_markup()
 
 

@@ -26,8 +26,8 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class NewBooking:
-    user_id: int
-    username: str | None
+    user_id: int  # кому бронь (ему приходят уведомления)
+    username: str | None  # ник того, кто оформил
     resource: Resource
     nominal_start: datetime
     duration: timedelta
@@ -35,6 +35,9 @@ class NewBooking:
     phone: str
     people: int
     comment: str
+    booked_by: int | None = None  # кто оформил; по умолчанию — сам user_id
+    contact_username: str | None = None  # ник из контакта, без @
+    weeks: int = 1  # сколько раз подряд, раз в неделю
 
 
 class SlotTaken(Exception):
@@ -129,15 +132,12 @@ class Service:
                     slot_end: datetime, pending: bool) -> dict:
         name = b.name
         summary = f"⏳ {name} (заявка)" if pending else name
-        username = getattr(b, "username", None)
         desc = [
             f"Контакт: {b.phone}",
             f"Человек: {b.people}",
         ]
         if b.comment:
             desc.append(f"Комментарий: {b.comment}")
-        if username:
-            desc.append(f"Telegram: @{username}")
         desc.append(f"Заявка #{booking_id} из Telegram-бота")
         return {
             "summary": summary,
@@ -147,43 +147,69 @@ class Service:
             "extendedProperties": {"private": {"booking_id": str(booking_id)}},
         }
 
-    async def create(self, nb: NewBooking) -> Booking:
-        """Повторно проверяет время и ставит в календарь заявку «⏳ ожидает»."""
+    def occurrences(self, nb: NewBooking) -> list[datetime]:
+        return [nb.nominal_start + timedelta(weeks=k) for k in range(max(1, nb.weeks))]
+
+    async def preview(self, nb: NewBooking) -> list[tuple[datetime, Slot | None]]:
+        """Для каждой даты серии — какое время получится (или None, если занято)."""
+        result = []
+        for start in self.occurrences(nb):
+            busy, o, c = await self.day(nb.resource, start.date())
+            result.append((start, fit_booking(start, nb.duration, busy, o, c, self.cfg.gap)))
+        return result
+
+    async def create(self, nb: NewBooking) -> list[Booking]:
+        """Повторно проверяет время и ставит в календарь заявки «⏳ ожидает».
+        Для серии занятые даты пропускаются. Если не получилось ни одной — SlotTaken."""
+        created: list[int] = []
         async with self._lock:
             if nb.nominal_start < self.now():
                 raise SlotTaken
-            busy, o, c = await self.day(nb.resource, nb.nominal_start.date())
-            slot = fit_booking(nb.nominal_start, nb.duration, busy, o, c, self.cfg.gap)
-            if slot is None:
-                raise SlotTaken
-            booking_id = self.db.create(
-                user_id=nb.user_id,
-                username=nb.username,
-                resource_key=nb.resource.key,
-                calendar_id=nb.resource.calendar_id,
-                start=slot.start,
-                end=slot.end,
-                name=nb.name,
-                phone=nb.phone,
-                people=nb.people,
-                comment=nb.comment,
-                status=dbm.PENDING,
-                created_at=self.now(),
-            )
-            try:
-                event_id = await self.cal.insert_event(
-                    nb.resource.calendar_id,
-                    self._event_body(nb, booking_id, slot.start, slot.end, pending=True),
+            for start in self.occurrences(nb):
+                busy, o, c = await self.day(nb.resource, start.date())
+                slot = fit_booking(start, nb.duration, busy, o, c, self.cfg.gap)
+                if slot is None:
+                    continue
+                booking_id = self.db.create(
+                    user_id=nb.user_id,
+                    username=nb.username,
+                    resource_key=nb.resource.key,
+                    calendar_id=nb.resource.calendar_id,
+                    start=slot.start,
+                    end=slot.end,
+                    name=nb.name,
+                    phone=nb.phone,
+                    people=nb.people,
+                    comment=nb.comment,
+                    status=dbm.PENDING,
+                    created_at=self.now(),
+                    booked_by=nb.booked_by or nb.user_id,
+                    contact_username=nb.contact_username,
                 )
-            except Exception:
-                self.db.set_status(booking_id, dbm.CANCELLED)
-                raise
-            self.db.set_event(booking_id, event_id)
-        return self.db.get(booking_id)
+                try:
+                    event_id = await self.cal.insert_event(
+                        nb.resource.calendar_id,
+                        self._event_body(nb, booking_id, slot.start, slot.end, pending=True),
+                    )
+                except Exception:
+                    self.db.set_status(booking_id, dbm.CANCELLED)
+                    for done in created:  # не оставляем половину серии
+                        await self.cancel(done)
+                    raise
+                self.db.set_event(booking_id, event_id)
+                created.append(booking_id)
+            if not created:
+                raise SlotTaken
+            if nb.weeks > 1:
+                self.db.set_series(created, created[0])
+        return [self.db.get(i) for i in created]
 
-    async def approve(self, booking_id: int) -> Booking | None:
-        b = self.db.get(booking_id)
-        if not b or b.status != dbm.PENDING or not b.event_id:
+    def group(self, b: Booking) -> list[Booking]:
+        """Бронь и все остальные брони её серии."""
+        return self.db.series(b.series_id) if b.series_id else [b]
+
+    async def _approve_one(self, b: Booking) -> Booking | None:
+        if b.status != dbm.PENDING or not b.event_id:
             return None
         if not await self.cal.event_exists(b.calendar_id, b.event_id):
             self.db.set_status(b.id, dbm.CANCELLED)
@@ -202,23 +228,40 @@ class Service:
                 self.db.mark_reminded(b, reminder_tag(td))
         return b
 
-    async def reject(self, booking_id: int) -> Booking | None:
+    async def approve(self, booking_id: int) -> list[Booking]:
+        """Подтверждает заявку (для серии — все её ожидающие даты)."""
         b = self.db.get(booking_id)
-        if not b or not self.db.set_status(b.id, dbm.REJECTED, only_if=(dbm.PENDING,)):
+        if not b:
+            return []
+        done = [await self._approve_one(x) for x in self.group(b)]
+        return [x for x in done if x]
+
+    async def reject(self, booking_id: int) -> list[Booking]:
+        b = self.db.get(booking_id)
+        if not b:
+            return []
+        done = []
+        for x in self.group(b):
+            if self.db.set_status(x.id, dbm.REJECTED, only_if=(dbm.PENDING,)):
+                if x.event_id:
+                    await self.cal.delete_event(x.calendar_id, x.event_id)
+                done.append(self.db.get(x.id))
+        return done
+
+    async def cancel(self, booking_id: int) -> Booking | None:
+        b = self.db.get(booking_id)
+        if not b or not self.db.set_status(b.id, dbm.CANCELLED):
             return None
         if b.event_id:
             await self.cal.delete_event(b.calendar_id, b.event_id)
         return self.db.get(b.id)
 
     async def cancel_by_client(self, booking_id: int, user_id: int) -> Booking | None:
+        """Отменить может тот, на кого бронь, или тот, кто её оформил."""
         b = self.db.get(booking_id)
-        if not b or b.user_id != user_id:
+        if not b or user_id not in (b.user_id, b.booked_by):
             return None
-        if not self.db.set_status(b.id, dbm.CANCELLED):
-            return None
-        if b.event_id:
-            await self.cal.delete_event(b.calendar_id, b.event_id)
-        return self.db.get(b.id)
+        return await self.cancel(b.id)
 
 
 def reminder_tag(td: timedelta) -> str:

@@ -16,11 +16,39 @@ from . import db as dbm
 from . import keyboards as kb
 from .config import Config, Resource
 from .db import Booking
-from .fmt import day_long, duration, hm, q, span
+from .fmt import day_long, day_short, duration, hm, q, span
 from .service import NewBooking, Service, SlotTaken
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+async def remember_users(handler, event, data):
+    """Запоминает @ник каждого, кто пишет боту. Если на этот ник раньше оформили
+    бронь (а человек ещё не писал боту), бронь переходит к нему и он получает сообщение."""
+    user = data.get("event_from_user")
+    svc: Service | None = data.get("svc")
+    if user and svc and not user.is_bot:
+        svc.db.remember_user(user.id, user.username)
+        if user.username:
+            claimed = svc.db.claim_bookings(user.id, user.username)
+            if claimed:
+                cfg: Config = data["cfg"]
+                try:
+                    await data["bot"].send_message(
+                        user.id,
+                        "📌 <b>На вас оформлена бронь</b>\n\n"
+                        + "\n\n".join(booking_card(cfg, b, with_contacts=False) for b in claimed),
+                    )
+                except Exception:
+                    log.exception("Не удалось уведомить %s о переданной брони", user.id)
+    return await handler(event, data)
+
+
+router.message.outer_middleware(remember_users)
+router.callback_query.outer_middleware(remember_users)
+
+STATUS_ICON = {dbm.PENDING: "⏳", dbm.APPROVED: "✅", dbm.REJECTED: "❌", dbm.CANCELLED: "🚫"}
 
 STATUS_TEXT = {
     dbm.PENDING: "⏳ ожидает подтверждения",
@@ -35,6 +63,7 @@ class Book(StatesGroup):
     phone = State()
     people = State()
     comment = State()
+    repeat = State()
     confirm = State()
 
 
@@ -54,8 +83,29 @@ def booking_card(cfg: Config, b: Booking, with_contacts: bool = True) -> str:
         ]
         if b.comment:
             lines.append(f"💬 {q(b.comment)}")
-        if b.username:
-            lines.append(f"Telegram: @{q(b.username)}")
+    if b.series_id:
+        lines.append("🔁 часть еженедельной серии")
+    return "\n".join(lines)
+
+
+def group_card(cfg: Config, items: list[Booking], with_contacts: bool = True) -> str:
+    """Карточка одной брони или целой серии (список дат со статусами)."""
+    if len(items) == 1:
+        return booking_card(cfg, items[0], with_contacts)
+    first = items[0]
+    r = cfg.resource(first.resource_key)
+    lines = [
+        f"<b>Заявка #{first.id}</b> — 🔁 каждую неделю, {len(items)} раз",
+        f"{r.title}",
+    ]
+    for b in items:
+        lines.append(
+            f"{STATUS_ICON.get(b.status, '')} {day_short(b.start.date())}, {span(b.start, b.end)}"
+        )
+    if with_contacts:
+        lines += [f"👤 {q(first.name)}", f"📞 {q(first.phone)}", f"👥 {first.people} чел."]
+        if first.comment:
+            lines.append(f"💬 {q(first.comment)}")
     return "\n".join(lines)
 
 
@@ -374,6 +424,7 @@ async def ask_people(msg: Message, state: FSMContext) -> None:
         username = USERNAME_RE.match(text)
         if username:
             phone = "@" + username.group(1)
+            await state.update_data(contact_username=username.group(1).lower())
         elif PHONE_RE.match(text) and 7 <= len(re.sub(r"\D", "", text)) <= 15:
             phone = text
         else:
@@ -381,9 +432,11 @@ async def ask_people(msg: Message, state: FSMContext) -> None:
                 "Не получилось распознать. Пример номера: +995 555 12 34 56, "
                 "или Telegram-ник: @username"
             )
+    if not phone.startswith("@"):
+        await state.update_data(contact_username=None)
     await state.update_data(phone=phone)
     await state.set_state(Book.people)
-    await msg.answer("Сколько будет человек?", reply_markup=kb.reply("1", "2", "3"))
+    await msg.answer("Сколько будет человек? Выберите или напишите число.", reply_markup=kb.people_kb())
 
 
 @router.message(Book.people, F.text)
@@ -399,38 +452,76 @@ async def ask_comment(msg: Message, state: FSMContext) -> None:
     )
 
 
+def _new_booking(data: dict, resource: Resource, svc: Service, user) -> NewBooking:
+    """Собирает заявку из ответов клиента. Если в контакте @ник другого человека,
+    который уже писал боту, — бронь оформляется на него."""
+    day = kb.parse_ymd(data["day"])
+    contact_username = data.get("contact_username")
+    recipient = user.id
+    if contact_username and contact_username != (user.username or "").lower():
+        recipient = svc.db.user_id_by_username(contact_username) or user.id
+    return NewBooking(
+        user_id=recipient,
+        username=user.username,
+        resource=resource,
+        nominal_start=svc.at(day, time(int(data["start"][:2]), int(data["start"][2:]))),
+        duration=timedelta(minutes=data["minutes"]),
+        name=data["name"],
+        phone=data["phone"],
+        people=data["people"],
+        comment=data.get("comment", ""),
+        booked_by=user.id,
+        contact_username=contact_username,
+        weeks=data.get("weeks", 1),
+    )
+
+
 @router.message(Book.comment, F.text)
-async def ask_confirm(msg: Message, state: FSMContext, svc: Service, cfg: Config) -> None:
+async def ask_repeat(msg: Message, state: FSMContext) -> None:
     comment = "" if msg.text.strip() == kb.BTN_SKIP else msg.text.strip()[:500]
     await state.update_data(comment=comment)
-    data = await state.get_data()
+    await state.set_state(Book.repeat)
+    await msg.answer("Почти готово!", reply_markup=ReplyKeyboardRemove())
+    await msg.answer("Повторять бронь каждую неделю в это же время?", reply_markup=kb.repeat_kb())
+
+
+@router.callback_query(Book.repeat, kb.RepeatCB.filter())
+async def ask_confirm(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMContext,
+                      svc: Service, cfg: Config) -> None:
     resource = await _resource_from_state(state, cfg)
     if not resource:
         await state.clear()
-        return await msg.answer("Что-то пошло не так, начните заново.", reply_markup=kb.main_menu())
-    day = kb.parse_ymd(data["day"])
-    start = svc.at(day, time(int(data["start"][:2]), int(data["start"][2:])))
-    chosen = timedelta(minutes=data["minutes"])
-    slot = next((s for d, s in await svc.durations(resource, start) if d == chosen), None)
-    if slot is None:
+        return await _expired(cb)
+    await state.update_data(weeks=callback_data.weeks)
+    data = await state.get_data()
+    nb = _new_booking(data, resource, svc, cb.from_user)
+    preview = await svc.preview(nb)
+    if preview[0][1] is None:
         await state.clear()
-        return await msg.answer(
-            "К сожалению, это время уже заняли. Выберите другое.", reply_markup=kb.main_menu()
-        )
+        await cb.answer()
+        await cb.message.edit_text("😔 К сожалению, это время уже заняли. Выберите другое.")
+        return await cb.message.answer("Главное меню:", reply_markup=kb.main_menu())
+    await cb.answer()
     await state.set_state(Book.confirm)
-    lines = [
-        "<b>Проверьте заявку:</b>",
-        f"{resource.title}",
-        f"📅 {day_long(day)}",
-        f"🕐 {span(slot.start, slot.end)}",
+    lines = ["<b>Проверьте заявку:</b>", f"{resource.title}"]
+    if len(preview) == 1:
+        slot = preview[0][1]
+        lines += [f"📅 {day_long(slot.start.date())}", f"🕐 {span(slot.start, slot.end)}"]
+    else:
+        lines.append(f"🔁 Каждую неделю, {len(preview)} раз:")
+        for start, slot in preview:
+            if slot:
+                lines.append(f"✅ {day_short(start.date())}, {span(slot.start, slot.end)}")
+            else:
+                lines.append(f"❌ {day_short(start.date())} — занято, пропустим")
+    lines += [
         f"👤 {q(data['name'])}",
         f"📞 {q(data['phone'])}",
         f"👥 {data['people']} чел.",
     ]
-    if comment:
-        lines.append(f"💬 {q(comment)}")
-    await msg.answer("Почти готово!", reply_markup=ReplyKeyboardRemove())
-    await msg.answer("\n".join(lines), reply_markup=kb.confirm_kb())
+    if data.get("comment"):
+        lines.append(f"💬 {q(data['comment'])}")
+    await cb.message.edit_text("\n".join(lines), reply_markup=kb.confirm_kb())
 
 
 @router.callback_query(Book.confirm, kb.ConfirmCB.filter())
@@ -446,34 +537,48 @@ async def on_confirm(cb: CallbackQuery, callback_data: kb.ConfirmCB, state: FSMC
     if not resource:
         return await _expired(cb)
     await cb.answer("Отправляю…")
-    day = kb.parse_ymd(data["day"])
-    nb = NewBooking(
-        user_id=cb.from_user.id,
-        username=cb.from_user.username,
-        resource=resource,
-        nominal_start=svc.at(day, time(int(data["start"][:2]), int(data["start"][2:]))),
-        duration=timedelta(minutes=data["minutes"]),
-        name=data["name"],
-        phone=data["phone"],
-        people=data["people"],
-        comment=data.get("comment", ""),
-    )
+    nb = _new_booking(data, resource, svc, cb.from_user)
     try:
-        booking = await svc.create(nb)
+        items = await svc.create(nb)
     except SlotTaken:
         await cb.message.edit_text("😔 К сожалению, это время только что заняли. Выберите другое.")
         return await cb.message.answer("Главное меню:", reply_markup=kb.main_menu())
 
-    await cb.message.edit_text(
-        booking_card(cfg, booking)
-        + "\n\nЗаявка отправлена администратору. Мы напишем вам, когда она будет подтверждена."
-    )
+    text = group_card(cfg, items)
+    if len(items) < nb.weeks:
+        text += f"\n\nЗанятые даты пропущены: оформлено {len(items)} из {nb.weeks}."
+    text += "\n\nЗаявка отправлена администратору."
+    partner = nb.contact_username if nb.contact_username != (cb.from_user.username or "").lower() else None
+    if partner and nb.user_id != cb.from_user.id:
+        text += f" Бронь оформлена на @{q(partner)} — уведомления будут приходить ему."
+    elif partner:
+        me = await cb.bot.me()
+        text += (
+            f"\n\n@{q(partner)} ещё не открывал этого бота, поэтому написать ему он пока не может. "
+            f"Перешлите ему ссылку t.me/{me.username} — как только он нажмёт «Start», "
+            f"бронь появится у него и уведомления будут приходить ему."
+        )
+    else:
+        text += " Мы напишем вам, когда она будет подтверждена."
+    await cb.message.edit_text(text)
     await cb.message.answer("Главное меню:", reply_markup=kb.main_menu())
+
+    if nb.user_id != cb.from_user.id:
+        try:
+            who = f" (оформил(а) @{q(cb.from_user.username)})" if cb.from_user.username else ""
+            await cb.bot.send_message(
+                nb.user_id,
+                f"📌 <b>На вас оформлена заявка{who}</b>\n\n"
+                + group_card(cfg, items, with_contacts=False)
+                + "\n\nМы напишем, когда администратор её подтвердит.",
+            )
+        except Exception:
+            log.exception("Не удалось уведомить партнёра %s", nb.user_id)
     try:
         await cb.bot.send_message(
             cfg.admin_id,
-            "🔔 <b>Новая заявка</b>\n\n" + booking_card(cfg, booking),
-            reply_markup=kb.admin_kb(booking.id),
+            "🔔 <b>Новая заявка</b>\n\n" + group_card(cfg, items),
+            reply_markup=kb.admin_kb(items[0].id),
         )
     except Exception:
         log.exception("Не удалось отправить заявку администратору")
@@ -490,7 +595,7 @@ async def on_confirm_stale(cb: CallbackQuery) -> None:
 async def on_client_cancel(cb: CallbackQuery, callback_data: kb.CancelCB,
                            svc: Service, cfg: Config) -> None:
     b = svc.db.get(callback_data.id)
-    if not b or b.user_id != cb.from_user.id:
+    if not b or cb.from_user.id not in (b.user_id, b.booked_by):
         return await _expired(cb)
     if callback_data.action == "ask":
         await cb.answer()
@@ -524,8 +629,13 @@ async def cmd_pending(msg: Message, svc: Service, cfg: Config) -> None:
     items = [b for b in svc.db.by_status(dbm.PENDING) if b.end > svc.now()]
     if not items:
         return await msg.answer("Нет заявок, ожидающих решения.")
+    seen: set[int] = set()
     for b in items:
-        await msg.answer(booking_card(cfg, b), reply_markup=kb.admin_kb(b.id))
+        if b.series_id in seen:
+            continue
+        if b.series_id:
+            seen.add(b.series_id)
+        await msg.answer(group_card(cfg, svc.group(b)), reply_markup=kb.admin_kb(b.id))
 
 
 @router.callback_query(kb.AdminCB.filter())
@@ -533,28 +643,32 @@ async def on_admin(cb: CallbackQuery, callback_data: kb.AdminCB, svc: Service, c
     if cb.from_user.id != cfg.admin_id:
         return await cb.answer("Недостаточно прав.", show_alert=True)
     if callback_data.action == "ok":
-        b = await svc.approve(callback_data.id)
+        done = await svc.approve(callback_data.id)
         client_text = "✅ <b>Ваша бронь подтверждена!</b>"
     else:
-        b = await svc.reject(callback_data.id)
+        done = await svc.reject(callback_data.id)
         client_text = (
             "❌ <b>К сожалению, заявка отклонена.</b>\n"
             "Попробуйте выбрать другое время или свяжитесь с нами."
         )
-    if not b:
-        current = svc.db.get(callback_data.id)
+    current = svc.db.get(callback_data.id)
+    if not done:
         await cb.answer("Заявка уже обработана, отменена или удалена из календаря.", show_alert=True)
         if current:
-            await cb.message.edit_text(booking_card(cfg, current))
+            await cb.message.edit_text(group_card(cfg, svc.group(current)))
         return
     await cb.answer("Готово")
-    await cb.message.edit_text(booking_card(cfg, b))
-    try:
-        await cb.bot.send_message(
-            b.user_id, client_text + "\n\n" + booking_card(cfg, b, with_contacts=False)
-        )
-    except Exception:
-        log.exception("Не удалось уведомить клиента %s", b.user_id)
+    await cb.message.edit_text(group_card(cfg, svc.group(current)))
+    # Пишем тому, на кого бронь, и тому, кто её оформил (если это не сам администратор).
+    first = done[0]
+    recipients = {first.user_id}
+    if first.booked_by and first.booked_by != cfg.admin_id:
+        recipients.add(first.booked_by)
+    for uid in recipients:
+        try:
+            await cb.bot.send_message(uid, client_text + "\n\n" + group_card(cfg, done, with_contacts=False))
+        except Exception:
+            log.exception("Не удалось уведомить клиента %s", uid)
 
 
 # ====================== ошибки ======================
