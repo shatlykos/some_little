@@ -198,18 +198,39 @@ class Calendar:
         return items
 
     async def busy_for_day(self, resource: Resource, day: date) -> list[Busy]:
-        """Занятость ресурса за сутки (все события с названиями): события его
-        календаря + события календаря-афиши, где в «Месте» указан этот ресурс."""
-        t_min = datetime.combine(day, time(0), self.tz)
-        t_max = t_min + timedelta(days=1)
-        own, events = await asyncio.gather(
-            self.list_events(resource.calendar_id, t_min, t_max),
-            self.list_events(self.cfg.events_calendar_id, t_min, t_max),
-        )
-        busy = [Busy(e.start, e.end, self.event_title(e), event=not e.from_bot) for e in own]
-        busy += [
-            Busy(e.start, e.end, self.event_title(e), event=True)
-            for e in events
-            if self.location_matches(resource, e.location)
-        ]
-        return busy
+        return (await self.busy_for_dates(resource, [day]))[day]
+
+    async def busy_for_dates(self, resource: Resource, days: list[date]) -> dict[date, list[Busy]]:
+        """Занятость ресурса на каждую из дат: события его календаря + события
+        календаря-афиши, где в «Месте» указан этот ресурс. Все события видны с
+        названиями; event=True — внесено вручную (мероприятие), а не бронь из бота.
+        Близкие даты читаются одним запросом, далёкие (ежегодные серии) — по отдельности."""
+        days = sorted(set(days))
+        if (days[-1] - days[0]).days <= 120:
+            ranges = [(days[0], days[-1])]
+        else:
+            ranges = [(d, d) for d in days]
+
+        async def load(d1: date, d2: date) -> list[Busy]:
+            t_min = datetime.combine(d1, time(0), self.tz)
+            t_max = datetime.combine(d2 + timedelta(days=1), time(0), self.tz)
+            own, events = await asyncio.gather(
+                self.list_events(resource.calendar_id, t_min, t_max),
+                self.list_events(self.cfg.events_calendar_id, t_min, t_max),
+            )
+            busy = [Busy(e.start, e.end, self.event_title(e), event=not e.from_bot) for e in own]
+            busy += [
+                Busy(e.start, e.end, self.event_title(e), event=True)
+                for e in events
+                if self.location_matches(resource, e.location)
+            ]
+            return busy
+
+        loaded = await asyncio.gather(*(load(a, b) for a, b in ranges))
+        all_busy = [b for chunk in loaded for b in chunk]
+        result: dict[date, list[Busy]] = {}
+        for d in days:
+            d_start = datetime.combine(d, time(0), self.tz)
+            d_end = d_start + timedelta(days=1)
+            result[d] = [b for b in all_busy if b.end > d_start and b.start < d_end]
+        return result

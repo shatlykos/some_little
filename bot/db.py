@@ -46,6 +46,7 @@ NEW_COLUMNS = {
     "booked_by": "INTEGER",  # кто оформил (может отличаться от user_id — бронь на партнёра)
     "contact_username": "TEXT",  # ник из контакта (без @, в нижнем регистре)
     "series_id": "INTEGER",  # id первой брони серии, если бронь повторяющаяся
+    "series_rule": "TEXT",  # описание повтора, например «Каждую неделю (по пятницам)»
 }
 
 
@@ -69,6 +70,7 @@ class Booking:
     booked_by: int | None = None
     contact_username: str | None = None
     series_id: int | None = None
+    series_rule: str | None = None
 
 
 class DB:
@@ -103,6 +105,7 @@ class DB:
             booked_by=r["booked_by"],
             contact_username=r["contact_username"],
             series_id=r["series_id"],
+            series_rule=r["series_rule"],
         )
 
     def create(self, **kw) -> int:
@@ -155,9 +158,10 @@ class DB:
         ).fetchall()
         return [self._row(r) for r in rows]
 
-    def set_series(self, booking_ids: list[int], series_id: int) -> None:
+    def set_series(self, booking_ids: list[int], series_id: int, rule: str = "") -> None:
         self.conn.executemany(
-            "UPDATE bookings SET series_id = ? WHERE id = ?", [(series_id, i) for i in booking_ids]
+            "UPDATE bookings SET series_id = ?, series_rule = ? WHERE id = ?",
+            [(series_id, rule, i) for i in booking_ids],
         )
         self.conn.commit()
 

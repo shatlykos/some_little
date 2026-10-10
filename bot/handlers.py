@@ -16,7 +16,8 @@ from . import db as dbm
 from . import keyboards as kb
 from .config import Config, Resource
 from .db import Booking
-from .fmt import day_long, day_short, duration, hm, q, span, weeks_word
+from . import recurrence as rec
+from .fmt import day_long, day_short, duration, hm, q, span
 from .service import NewBooking, Service, SlotTaken
 
 log = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ class Book(StatesGroup):
     people = State()
     comment = State()
     repeat = State()
+    repeat_days = State()
+    repeat_count = State()
     confirm = State()
 
 
@@ -106,13 +109,18 @@ def group_card(cfg: Config, items: list[Booking], with_contacts: bool = True) ->
     first = items[0]
     r = cfg.resource(first.resource_key)
     lines = [
-        f"<b>Заявка #{first.id}</b> — 🔁 раз в неделю, {len(items)} {weeks_word(len(items))}",
+        f"<b>Заявка #{first.id}</b> — 🔁 {q(first.series_rule or 'повторяется')}",
         f"{r.title}",
+        f"{len(items)} дат, {span(first.start, first.end)}:",
     ]
-    for b in items:
+    shown = items if len(items) <= 14 else items[:12]
+    for b in shown:
         lines.append(
             f"{STATUS_ICON.get(b.status, '')} {day_short(b.start.date())}, {span(b.start, b.end)}"
         )
+    if len(shown) < len(items):
+        last = items[-1]
+        lines.append(f"… и ещё {len(items) - len(shown)}, до {day_short(last.start.date())}")
     if with_contacts:
         lines += [f"👤 {q(first.name)}", f"📞 {q(first.phone)}", f"👥 {first.people} чел."]
         if first.comment:
@@ -485,50 +493,138 @@ def _new_booking(data: dict, resource: Resource, svc: Service, user) -> NewBooki
         comment=data.get("comment", ""),
         booked_by=user.id,
         contact_username=contact_username,
-        weeks=data.get("weeks", 1),
+        freq=data.get("freq", rec.NONE),
+        count=data.get("count", 1),
+        weekdays=tuple(data.get("weekdays", ())),
     )
 
 
 @router.message(Book.comment, F.text)
 async def ask_repeat(msg: Message, state: FSMContext) -> None:
     comment = "" if msg.text.strip() == kb.BTN_SKIP else msg.text.strip()[:500]
-    await state.update_data(comment=comment)
+    await state.update_data(comment=comment, freq=rec.NONE, count=1, weekdays=[])
     await state.set_state(Book.repeat)
+    day = kb.parse_ymd((await state.get_data())["day"])
     await msg.answer("Почти готово!", reply_markup=ReplyKeyboardRemove())
-    await msg.answer(
-        "Повторять бронь каждую неделю в тот же день и время?", reply_markup=kb.repeat_kb()
-    )
+    await msg.answer("🔁 <b>Повторять бронь?</b>", reply_markup=kb.repeat_kb(day))
+
+
+def _start_of(data: dict, svc: Service):
+    day = kb.parse_ymd(data["day"])
+    return svc.at(day, time(int(data["start"][:2]), int(data["start"][2:])))
 
 
 @router.callback_query(Book.repeat, kb.RepeatCB.filter())
-async def ask_confirm(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMContext,
-                      svc: Service, cfg: Config) -> None:
-    resource = await _resource_from_state(state, cfg)
-    if not resource:
-        await state.clear()
-        return await _expired(cb)
-    await state.update_data(weeks=callback_data.weeks)
+async def on_repeat(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMContext,
+                    svc: Service, cfg: Config) -> None:
+    freq = callback_data.freq
     data = await state.get_data()
-    nb = _new_booking(data, resource, svc, cb.from_user)
+    start = _start_of(data, svc)
+    await cb.answer()
+    if freq == rec.NONE:
+        await state.update_data(freq=rec.NONE, count=1)
+        return await _show_confirm(cb.message, state, svc, cfg, cb.from_user, edit=True)
+    if freq == rec.CUSTOM:
+        days = (start.weekday(),)
+        await state.update_data(freq=freq, weekdays=list(days))
+        await state.set_state(Book.repeat_days)
+        return await cb.message.edit_text(
+            "🔁 <b>По каким дням недели?</b>\nОтметьте нужные дни и нажмите «Готово».",
+            reply_markup=kb.repeat_days_kb(days),
+        )
+    await state.update_data(freq=freq)
+    await state.set_state(Book.repeat_count)
+    await cb.message.edit_text(
+        f"🔁 <b>{rec.label(freq, start.date())}</b>\n"
+        "Сколько раз? Выберите или напишите число.",
+        reply_markup=kb.repeat_count_kb(freq, start, ()),
+    )
+
+
+@router.callback_query(Book.repeat_days, kb.RepeatDayCB.filter())
+async def on_repeat_day(cb: CallbackQuery, callback_data: kb.RepeatDayCB, state: FSMContext,
+                        svc: Service) -> None:
+    data = await state.get_data()
+    days = set(data.get("weekdays", []))
+    if callback_data.day >= 0:
+        days ^= {callback_data.day}
+        await state.update_data(weekdays=sorted(days))
+        await cb.answer()
+        return await cb.message.edit_reply_markup(reply_markup=kb.repeat_days_kb(tuple(days)))
+    if not days:
+        return await cb.answer("Отметьте хотя бы один день.", show_alert=True)
+    await cb.answer()
+    await state.set_state(Book.repeat_count)
+    start = _start_of(data, svc)
+    await cb.message.edit_text(
+        f"🔁 <b>{rec.label(rec.CUSTOM, start.date(), tuple(sorted(days)))}</b>\n"
+        "Сколько недель? Выберите или напишите число.",
+        reply_markup=kb.repeat_count_kb(rec.CUSTOM, start, tuple(sorted(days))),
+    )
+
+
+@router.callback_query(Book.repeat_count, kb.RepeatCountCB.filter())
+async def on_repeat_count(cb: CallbackQuery, callback_data: kb.RepeatCountCB, state: FSMContext,
+                          svc: Service, cfg: Config) -> None:
+    await cb.answer()
+    await state.update_data(count=callback_data.n)
+    await _show_confirm(cb.message, state, svc, cfg, cb.from_user, edit=True)
+
+
+@router.message(Book.repeat_count, F.text)
+async def on_repeat_count_text(msg: Message, state: FSMContext, svc: Service, cfg: Config) -> None:
+    text = msg.text.strip()
+    if not text.isdigit() or not 2 <= int(text) <= rec.MAX_OCCURRENCES:
+        return await msg.answer(f"Напишите число от 2 до {rec.MAX_OCCURRENCES}.")
+    await state.update_data(count=int(text))
+    await _show_confirm(msg, state, svc, cfg, msg.from_user, edit=False)
+
+
+async def _show_confirm(message: Message, state: FSMContext, svc: Service, cfg: Config,
+                        user, edit: bool) -> None:
+    """Экран «Проверьте заявку» со всеми датами серии (свободные / занятые)."""
+    resource = await _resource_from_state(state, cfg)
+    data = await state.get_data()
+    if not resource or "day" not in data:
+        await state.clear()
+        return await message.answer("Что-то пошло не так, начните заново.", reply_markup=kb.main_menu())
+    nb = _new_booking(data, resource, svc, user)
+    # Одно сообщение: сначала «проверяю», потом в нём же — результат.
+    if edit:
+        target = message
+        if len(svc.occurrences(nb)) > 1:
+            await target.edit_text("⏳ Проверяю все даты…")
+    else:
+        target = await message.answer("⏳ Проверяю…")
     preview = await svc.preview(nb)
+    send = target.edit_text
     if preview[0][1] is None:
         await state.clear()
-        await cb.answer()
-        await cb.message.edit_text("😔 К сожалению, это время уже заняли. Выберите другое.")
-        return await cb.message.answer("Главное меню:", reply_markup=kb.main_menu())
-    await cb.answer()
+        await send("😔 К сожалению, это время уже заняли. Выберите другое.")
+        return await message.answer("Главное меню:", reply_markup=kb.main_menu())
     await state.set_state(Book.confirm)
     lines = ["<b>Проверьте заявку:</b>", f"{resource.title}"]
     if len(preview) == 1:
         slot = preview[0][1]
         lines += [f"📅 {day_long(slot.start.date())}", f"🕐 {span(slot.start, slot.end)}"]
     else:
-        lines.append(f"🔁 Раз в неделю, {len(preview)} {weeks_word(len(preview))} подряд:")
-        for start, slot in preview:
-            if slot:
-                lines.append(f"✅ {day_short(start.date())}, {span(slot.start, slot.end)}")
-            else:
-                lines.append(f"❌ {day_short(start.date())} — занято, пропустим")
+        free = [(s, sl) for s, sl in preview if sl]
+        taken = [s for s, sl in preview if sl is None]
+        lines.append(f"🔁 {q(svc.rule_label(nb))}")
+        lines.append(
+            f"📅 с {day_short(preview[0][0].date())} по {day_short(preview[-1][0].date())}, "
+            f"{len(preview)} дат"
+        )
+        if len(preview) <= 14:
+            for s, sl in preview:
+                lines.append(f"✅ {day_short(s.date())}, {span(sl.start, sl.end)}" if sl
+                             else f"❌ {day_short(s.date())} — занято, пропустим")
+        else:
+            lines.append(f"✅ свободно: {len(free)}")
+            if taken:
+                lines.append(f"❌ занято, пропустим: {len(taken)} — "
+                             + ", ".join(day_short(s.date()) for s in taken[:10])
+                             + (" …" if len(taken) > 10 else ""))
     lines += [
         f"👤 {q(data['name'])}",
         f"📞 {q(data['phone'])}",
@@ -536,7 +632,7 @@ async def ask_confirm(cb: CallbackQuery, callback_data: kb.RepeatCB, state: FSMC
     ]
     if data.get("comment"):
         lines.append(f"💬 {q(data['comment'])}")
-    await cb.message.edit_text(with_notes("\n".join(lines), cfg, resource), reply_markup=kb.confirm_kb())
+    await send(with_notes("\n".join(lines), cfg, resource), reply_markup=kb.confirm_kb())
 
 
 @router.callback_query(Book.confirm, kb.ConfirmCB.filter())
@@ -560,8 +656,9 @@ async def on_confirm(cb: CallbackQuery, callback_data: kb.ConfirmCB, state: FSMC
         return await cb.message.answer("Главное меню:", reply_markup=kb.main_menu())
 
     text = group_card(cfg, items)
-    if len(items) < nb.weeks:
-        text += f"\n\nЗанятые даты пропущены: оформлено {len(items)} из {nb.weeks} недель."
+    planned = len(svc.occurrences(nb))
+    if len(items) < planned:
+        text += f"\n\nЗанятые даты пропущены: оформлено {len(items)} из {planned}."
     text += "\n\nЗаявка отправлена администратору."
     partner = nb.contact_username if nb.contact_username != (cb.from_user.username or "").lower() else None
     if partner and nb.user_id != cb.from_user.id:

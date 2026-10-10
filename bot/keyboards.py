@@ -12,7 +12,8 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .config import Resource
-from .fmt import day_short, duration, hm, span, weeks_word
+from . import recurrence as rec
+from .fmt import day_short, duration, hm, span
 from .slots import Slot
 
 # ---------- главное меню ----------
@@ -89,10 +90,15 @@ class NavCB(CallbackData, prefix="n"):
 
 
 class RepeatCB(CallbackData, prefix="w"):
-    weeks: int  # 1 — один раз
+    freq: str  # recurrence.NONE / DAILY / WEEKLY / MONTHLY / YEARLY / CUSTOM
 
 
-REPEAT_OPTIONS = (1, 4, 8, 12)
+class RepeatDayCB(CallbackData, prefix="wd"):
+    day: int  # 0=пн … 6=вс; -1 — «Готово»
+
+
+class RepeatCountCB(CallbackData, prefix="wn"):
+    n: int
 
 
 class ConfirmCB(CallbackData, prefix="c"):
@@ -217,12 +223,29 @@ def my_booking_kb(booking_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def repeat_kb() -> InlineKeyboardMarkup:
+def repeat_kb(start: date) -> InlineKeyboardMarkup:
+    """Варианты повтора — как в Google Calendar."""
     kb = InlineKeyboardBuilder()
-    for w in REPEAT_OPTIONS:
-        months = {4: "≈ месяц", 8: "≈ 2 месяца", 12: "≈ 3 месяца"}.get(w)
-        text = "Один раз" if w == 1 else f"🔁 Раз в неделю — {w} {weeks_word(w)}" + (f" ({months})" if months else "")
-        kb.button(text=text, callback_data=RepeatCB(weeks=w))
+    for freq in (rec.NONE, rec.DAILY, rec.WEEKLY, rec.MONTHLY, rec.YEARLY):
+        kb.button(text=rec.label(freq, start), callback_data=RepeatCB(freq=freq))
+    kb.button(text="Другое…", callback_data=RepeatCB(freq=rec.CUSTOM))
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def repeat_days_kb(selected: tuple[int, ...]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for i, name in enumerate(rec.WD_SHORT):
+        kb.button(text=("✅ " if i in selected else "") + name, callback_data=RepeatDayCB(day=i))
+    kb.button(text="Готово ➡️", callback_data=RepeatDayCB(day=-1))
+    kb.adjust(4, 3, 1)
+    return kb.as_markup()
+
+
+def repeat_count_kb(freq: str, start: datetime, weekdays: tuple[int, ...]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for n in rec.COUNT_OPTIONS[freq]:
+        kb.button(text=rec.count_button(freq, start, n, weekdays), callback_data=RepeatCountCB(n=n))
     kb.adjust(1)
     return kb.as_markup()
 

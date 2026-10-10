@@ -90,7 +90,7 @@ class FakeSession(BaseSession):
             date=datetime.now(),
             chat=Chat(id=chat_id, type="private"),
             text=getattr(method, "text", None) or "",
-        )
+        ).as_(bot)  # как настоящий Telegram: сообщение привязано к боту
 
     async def stream_content(self, *a, **kw):  # pragma: no cover
         yield b""
@@ -206,7 +206,7 @@ def test_full_booking_flow(env):
         await send(dp, bot, CLIENT, contact=Contact(phone_number="995555123456", first_name="Анна"))
         await send(dp, bot, CLIENT, "4")
         await send(dp, bot, CLIENT, "Репетиция <b>")
-        await press(dp, bot, CLIENT, kb.RepeatCB(weeks=1))
+        await press(dp, bot, CLIENT, kb.RepeatCB(freq="none"))
         assert "17:05–17:55" in session.sent[-1].text
         assert "&lt;b&gt;" in session.sent[-1].text  # HTML экранирован
         await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
@@ -377,7 +377,7 @@ def test_contact_can_be_telegram_username(env):
         assert "Сколько будет человек" in session.sent[-1].text
         await send(dp, bot, CLIENT, "2")
         await send(dp, bot, CLIENT, kb.BTN_SKIP)
-        await press(dp, bot, CLIENT, kb.RepeatCB(weeks=1))
+        await press(dp, bot, CLIENT, kb.RepeatCB(freq="none"))
         assert "📞 @psihology_ot_Apsitis" in session.sent[-1].text
         await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
         assert svc.db.get(1).phone == "@psihology_ot_Apsitis"
@@ -385,7 +385,7 @@ def test_contact_can_be_telegram_username(env):
     asyncio.run(scenario())
 
 
-async def _book(dp, bot, uid, contact, people="3", weeks=1, start="1800", day="20261012"):
+async def _book(dp, bot, uid, contact, people="3", start="1800", day="20261012"):
     await send(dp, bot, uid, kb.BTN_BOOK)
     await press(dp, bot, uid, kb.ResCB(key="workshop"))
     await press(dp, bot, uid, kb.DayCB(mode="b", day=day))
@@ -395,7 +395,7 @@ async def _book(dp, bot, uid, contact, people="3", weeks=1, start="1800", day="2
     await send(dp, bot, uid, contact)
     await send(dp, bot, uid, people)
     await send(dp, bot, uid, "Психология")
-    await press(dp, bot, uid, kb.RepeatCB(weeks=weeks))
+    await press(dp, bot, uid, kb.RepeatCB(freq="none"))
     await press(dp, bot, uid, kb.ConfirmCB(ok=True))
 
 
@@ -452,22 +452,71 @@ def test_weekly_series(env):
         await send(dp, bot, CLIENT, "7")
         await send(dp, bot, CLIENT, kb.BTN_SKIP)
         labels = [b.text for b in buttons(session.last_markup())]
-        assert labels[0] == "Один раз" and "🔁 Раз в неделю — 4 недели (≈ месяц)" in labels
-        await press(dp, bot, CLIENT, kb.RepeatCB(weeks=4))
+        assert labels == ["Не повторяется", "Каждый день", "Каждую неделю (по понедельникам)",
+                          "Каждый месяц (во второй понедельник)", "Каждый год (12 октября)",
+                          "Другое…"]
+        await press(dp, bot, CLIENT, kb.RepeatCB(freq="weekly"))
+        counts = [b.text for b in buttons(session.last_markup())]
+        assert counts[0] == "4 раза — до пн 2 ноя"
+        await press(dp, bot, CLIENT, kb.RepeatCountCB(n=4))
         preview = session.sent[-1].text
         assert "❌ пн 19 окт — занято, пропустим" in preview and "✅ пн 2 ноя" in preview
         await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
         items = svc.db.series(1)
         assert [b.start.day for b in items] == [12, 26, 2]
-        assert "оформлено 3 из 4 недель" in [t for t in session.texts(CLIENT) if "Заявка #1" in t][-1]
+        assert "оформлено 3 из 4" in [t for t in session.texts(CLIENT) if "Заявка #1" in t][-1]
         await press(dp, bot, ADMIN, kb.AdminCB(action="ok", id=1))
         assert all(b.status == dbm.APPROVED for b in svc.db.series(1))
         approved = [t for t in session.texts(CLIENT) if "подтверждена" in t][-1]
         assert "📺 В аренду входит телевизор." in approved and "еду и напитки" in approved
-        assert "раз в неделю, 3 недели" in approved
+        assert "Каждую неделю (по понедельникам)" in approved
         assert all(e.summary == "Анна" for e in cal.events["cal-workshop"].values() if e.from_bot)
         # отмена одной даты серии не трогает остальные
         await press(dp, bot, CLIENT, kb.CancelCB(action="yes", id=items[1].id))
         assert [b.status for b in svc.db.series(1)] == [dbm.APPROVED, dbm.CANCELLED, dbm.APPROVED]
+
+    asyncio.run(scenario())
+
+
+def test_custom_weekdays_and_typed_count(env):
+    cfg, cal, svc, session, bot, dp = env
+    Clock.now = datetime(2026, 10, 9, 12, 0, tzinfo=TZ)
+
+    async def scenario():
+        await send(dp, bot, CLIENT, kb.BTN_BOOK)
+        await press(dp, bot, CLIENT, kb.ResCB(key="piano"))
+        await press(dp, bot, CLIENT, kb.DayCB(mode="b", day="20261012"))  # понедельник
+        await press(dp, bot, CLIENT, kb.StartCB(hhmm="1000"))
+        await press(dp, bot, CLIENT, kb.DurCB(minutes=30))
+        await send(dp, bot, CLIENT, "Анна")
+        await send(dp, bot, CLIENT, "+995555123456")
+        await send(dp, bot, CLIENT, "1")
+        await send(dp, bot, CLIENT, kb.BTN_SKIP)
+        await press(dp, bot, CLIENT, kb.RepeatCB(freq="custom"))
+        days = [b.text for b in buttons(session.last_markup())]
+        assert days[0] == "✅ Пн" and days[2] == "Ср"
+        await press(dp, bot, CLIENT, kb.RepeatDayCB(day=2))   # + среда
+        await press(dp, bot, CLIENT, kb.RepeatDayCB(day=-1))  # готово
+        assert "Каждую неделю: Пн, Ср" in session.sent[-1].text
+        await send(dp, bot, CLIENT, "1")
+        assert "от 2 до 100" in session.sent[-1].text
+        await send(dp, bot, CLIENT, "3")  # 3 недели → 6 дат
+        preview = [m.text for m in session.sent if getattr(m, "text", "") and "Проверьте заявку" in m.text][-1]
+        assert "6 дат" in preview and "✅ ср 28 окт, 10:00–10:30" in preview
+        await press(dp, bot, CLIENT, kb.ConfirmCB(ok=True))
+        series = svc.db.series(1)
+        assert [b.start.day for b in series] == [12, 14, 19, 21, 26, 28]
+        assert series[0].series_rule == "Каждую неделю: Пн, Ср"
+
+        # ежедневно на 30 дней — одним запросом к календарю на весь период
+        calls = []
+        orig = cal._list_sync
+        cal._list_sync = lambda cid, a, b: calls.append((cid, a, b)) or orig(cid, a, b)
+        from bot.service import NewBooking
+        nb = NewBooking(CLIENT, None, cfg.resource("piano"),
+                        datetime(2026, 11, 2, 15, tzinfo=TZ), timedelta(minutes=30), "Б", "+995", 1, "",
+                        freq="daily", count=30)
+        prev = await svc.preview(nb)
+        assert len(prev) == 30 and all(sl for _, sl in prev) and len(calls) == 2
 
     asyncio.run(scenario())

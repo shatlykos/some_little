@@ -10,6 +10,7 @@ from . import db as dbm
 from .config import Config, Resource
 from .db import DB, Booking
 from .fmt import day_long, q, span
+from . import recurrence
 from .gcal import Calendar
 from .slots import (
     Busy,
@@ -37,7 +38,9 @@ class NewBooking:
     comment: str
     booked_by: int | None = None  # кто оформил; по умолчанию — сам user_id
     contact_username: str | None = None  # ник из контакта, без @
-    weeks: int = 1  # сколько раз подряд, раз в неделю
+    freq: str = recurrence.NONE  # как повторять (см. recurrence.py)
+    count: int = 1  # сколько раз (для «Другое…» — сколько недель)
+    weekdays: tuple[int, ...] = ()  # для «Другое…»: дни недели 0=пн … 6=вс
 
 
 class SlotTaken(Exception):
@@ -152,14 +155,19 @@ class Service:
         }
 
     def occurrences(self, nb: NewBooking) -> list[datetime]:
-        return [nb.nominal_start + timedelta(weeks=k) for k in range(max(1, nb.weeks))]
+        return recurrence.occurrences(nb.nominal_start, nb.freq, nb.count, nb.weekdays)
+
+    def rule_label(self, nb: NewBooking) -> str:
+        return recurrence.label(nb.freq, nb.nominal_start.date(), nb.weekdays)
 
     async def preview(self, nb: NewBooking) -> list[tuple[datetime, Slot | None]]:
         """Для каждой даты серии — какое время получится (или None, если занято)."""
+        starts = self.occurrences(nb)
+        busy = await self.cal.busy_for_dates(nb.resource, [s.date() for s in starts])
         result = []
-        for start in self.occurrences(nb):
-            busy, o, c = await self.day(nb.resource, start.date())
-            result.append((start, fit_booking(start, nb.duration, busy, o, c, self.cfg.gap)))
+        for start in starts:
+            o, c = self.cal.day_bounds(start.date())
+            result.append((start, fit_booking(start, nb.duration, busy[start.date()], o, c, self.cfg.gap)))
         return result
 
     async def create(self, nb: NewBooking) -> list[Booking]:
@@ -169,9 +177,7 @@ class Service:
         async with self._lock:
             if nb.nominal_start < self.now():
                 raise SlotTaken
-            for start in self.occurrences(nb):
-                busy, o, c = await self.day(nb.resource, start.date())
-                slot = fit_booking(start, nb.duration, busy, o, c, self.cfg.gap)
+            for start, slot in await self.preview(nb):  # свежая проверка под замком
                 if slot is None:
                     continue
                 booking_id = self.db.create(
@@ -204,8 +210,8 @@ class Service:
                 created.append(booking_id)
             if not created:
                 raise SlotTaken
-            if nb.weeks > 1:
-                self.db.set_series(created, created[0])
+            if len(self.occurrences(nb)) > 1:
+                self.db.set_series(created, created[0], self.rule_label(nb))
         return [self.db.get(i) for i in created]
 
     def group(self, b: Booking) -> list[Booking]:
